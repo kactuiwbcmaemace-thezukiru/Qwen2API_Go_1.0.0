@@ -17,6 +17,7 @@ import (
 	"qwen2api/internal/logging"
 	"qwen2api/internal/metrics"
 	"qwen2api/internal/openai"
+	"qwen2api/internal/prompts"
 	"qwen2api/internal/storage"
 )
 
@@ -88,7 +89,91 @@ func (h *Handler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 		"searchInfoMode":        runtime.SearchInfoMode,
 		"simpleModelMap":        runtime.SimpleModelMap,
 		"chatCleanupMode":       runtime.ChatCleanupMode,
+		"qwenWeb2ControlPrompt": runtime.QwenWeb2ControlPrompt,
 	})
+}
+
+func (h *Handler) HandlePrompts(w http.ResponseWriter, r *http.Request) {
+	runtime := h.runtime.Snapshot()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data":       prompts.List(runtime.PromptOverrides),
+		"categories": prompts.Categories(),
+	})
+}
+
+func (h *Handler) HandlePromptsAPI(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.HandlePrompts(w, r)
+	case http.MethodPost:
+		h.HandleSetPrompts(w, r)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "Method Not Allowed"})
+	}
+}
+
+func (h *Handler) HandleSetPrompts(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Prompts map[string]string `json:"prompts"`
+	}
+	if err := decodeJSON(r, &payload); err != nil || payload.Prompts == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体格式错误"})
+		return
+	}
+
+	overrides := prompts.CloneOverrides(h.runtime.Snapshot().PromptOverrides)
+	for id, value := range payload.Prompts {
+		if !prompts.KnownID(id) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "未知提示词 ID: " + id})
+			return
+		}
+		overrides[id] = value
+	}
+	overrides = prompts.NormalizeOverrides(overrides)
+
+	if err := h.persistRuntimeSettings(func(snapshot *config.RuntimeSnapshot) {
+		snapshot.PromptOverrides = prompts.CloneOverrides(overrides)
+		snapshot.QwenWeb2ControlPrompt = prompts.Resolve(overrides, prompts.IDQwenWeb2Control)
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	h.runtime.SetPromptOverrides(overrides)
+	writeJSON(w, http.StatusOK, map[string]any{"status": true, "message": "提示词配置已热更新并写入 .env"})
+}
+
+func (h *Handler) HandleResetPrompts(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decodeJSON(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体格式错误"})
+		return
+	}
+
+	overrides := prompts.CloneOverrides(h.runtime.Snapshot().PromptOverrides)
+	if len(payload.IDs) == 0 {
+		overrides = map[string]string{}
+	} else {
+		for _, id := range payload.IDs {
+			if !prompts.KnownID(id) {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "未知提示词 ID: " + id})
+				return
+			}
+			delete(overrides, id)
+		}
+	}
+	overrides = prompts.NormalizeOverrides(overrides)
+
+	if err := h.persistRuntimeSettings(func(snapshot *config.RuntimeSnapshot) {
+		snapshot.PromptOverrides = prompts.CloneOverrides(overrides)
+		snapshot.QwenWeb2ControlPrompt = prompts.Resolve(overrides, prompts.IDQwenWeb2Control)
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	h.runtime.SetPromptOverrides(overrides)
+	writeJSON(w, http.StatusOK, map[string]any{"status": true, "message": "提示词已恢复默认并写入 .env"})
 }
 
 func (h *Handler) HandleAddRegularKey(w http.ResponseWriter, r *http.Request) {
@@ -261,6 +346,28 @@ func (h *Handler) HandleSetChatCleanupMode(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"status": true, "message": "对话清理模式更新成功，已热更新并写入 .env"})
 }
 
+func (h *Handler) HandleSetQwenWeb2ControlPrompt(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		QwenWeb2ControlPrompt string `json:"qwenWeb2ControlPrompt"`
+	}
+	if err := decodeJSON(r, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "璇锋眰浣撴牸寮忛敊璇?"})
+		return
+	}
+	prompt := strings.TrimSpace(payload.QwenWeb2ControlPrompt)
+	if err := h.persistRuntimeSettings(func(snapshot *config.RuntimeSnapshot) {
+		snapshot.QwenWeb2ControlPrompt = prompt
+		overrides := prompts.CloneOverrides(snapshot.PromptOverrides)
+		overrides[prompts.IDQwenWeb2Control] = prompt
+		snapshot.PromptOverrides = prompts.NormalizeOverrides(overrides)
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	h.runtime.SetQwenWeb2ControlPrompt(prompt)
+	writeJSON(w, http.StatusOK, map[string]any{"status": true, "message": "Web2 Qwen control prompt updated, hot reloaded and saved to .env"})
+}
+
 func (h *Handler) HandleReloadRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	if err := config.ReloadDotEnv(config.DefaultEnvPath); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "重新加载 .env 失败: " + err.Error()})
@@ -364,6 +471,9 @@ func (h *Handler) persistRuntimeSettings(mutator func(snapshot *config.RuntimeSn
 	if snapshot.BatchLoginConcurrency <= 0 {
 		snapshot.BatchLoginConcurrency = 1
 	}
+	overrides := prompts.CloneOverrides(snapshot.PromptOverrides)
+	overrides[prompts.IDQwenWeb2Control] = snapshot.QwenWeb2ControlPrompt
+	snapshot.PromptOverrides = prompts.NormalizeOverrides(overrides)
 	if err := config.SaveDotEnvValues(config.DefaultEnvPath, config.RuntimeSnapshotToEnv(snapshot)); err != nil {
 		return fmt.Errorf("写入 .env 失败: %w", err)
 	}

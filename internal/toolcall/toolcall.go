@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"qwen2api/internal/prompts"
 )
 
 type ToolSchema struct {
@@ -72,6 +74,10 @@ type StreamChunkResult struct {
 }
 
 func InjectPrompt(messages []map[string]any, toolsRaw any, toolChoice any) InjectionResult {
+	return InjectPromptWithOverrides(messages, toolsRaw, toolChoice, nil)
+}
+
+func InjectPromptWithOverrides(messages []map[string]any, toolsRaw any, toolChoice any, promptOverrides map[string]string) InjectionResult {
 	normalizedMessages := normalizeToolMessages(messages)
 	toolSchemas := normalizeToolSchemas(toolsRaw)
 	if len(toolSchemas) == 0 {
@@ -92,18 +98,20 @@ func InjectPrompt(messages []map[string]any, toolsRaw any, toolChoice any) Injec
 		}
 	}
 
-	sections := []string{"You have access to these tools:", ""}
+	toolDetails := make([]string, 0, len(toolSchemas)*4)
 	for _, schema := range toolSchemas {
 		rawParams, _ := json.Marshal(schema.Parameters)
-		sections = append(sections,
+		toolDetails = append(toolDetails,
 			fmt.Sprintf("Tool: %s", schema.Name),
 			fmt.Sprintf("Description: %s", fallbackText(schema.Description, "(no description provided)")),
 			fmt.Sprintf("Parameters: %s", string(rawParams)),
 			"",
 		)
 	}
-	sections = append(sections, buildInstructions(toolNames, policy))
-	toolPrompt := strings.TrimSpace(strings.Join(sections, "\n"))
+	toolPrompt := prompts.Render(promptOverrides, prompts.IDOpenAIToolPrompt, map[string]string{
+		"tool_details": strings.TrimSpace(strings.Join(toolDetails, "\n")),
+		"instructions": buildInstructionsWithOverrides(toolNames, policy, promptOverrides),
+	})
 
 	for i, message := range normalizedMessages {
 		if strings.EqualFold(fmt.Sprint(message["role"]), "system") {
@@ -114,7 +122,7 @@ func InjectPrompt(messages []map[string]any, toolsRaw any, toolChoice any) Injec
 				normalizedMessages[i]["content"] = strings.TrimSpace(current) + "\n\n" + toolPrompt
 			}
 			return InjectionResult{
-				Messages:  appendToolReminder(normalizedMessages, toolNames, policy),
+				Messages:  appendToolReminder(normalizedMessages, toolNames, policy, promptOverrides),
 				ToolNames: toolNames,
 				Policy:    policy,
 			}
@@ -122,18 +130,18 @@ func InjectPrompt(messages []map[string]any, toolsRaw any, toolChoice any) Injec
 	}
 
 	return InjectionResult{
-		Messages:  appendToolReminder(append([]map[string]any{{"role": "system", "content": toolPrompt}}, normalizedMessages...), toolNames, policy),
+		Messages:  appendToolReminder(append([]map[string]any{{"role": "system", "content": toolPrompt}}, normalizedMessages...), toolNames, policy, promptOverrides),
 		ToolNames: toolNames,
 		Policy:    policy,
 	}
 }
 
-func appendToolReminder(messages []map[string]any, toolNames []string, policy ToolChoicePolicy) []map[string]any {
+func appendToolReminder(messages []map[string]any, toolNames []string, policy ToolChoicePolicy, promptOverrides map[string]string) []map[string]any {
 	if !policy.Enabled || len(messages) == 0 || len(toolNames) == 0 {
 		return messages
 	}
 
-	reminder := buildReminder(toolNames, policy)
+	reminder := buildReminder(toolNames, policy, promptOverrides)
 	if strings.TrimSpace(reminder) == "" {
 		return messages
 	}
@@ -152,7 +160,7 @@ func appendToolReminder(messages []map[string]any, toolNames []string, policy To
 	return messages
 }
 
-func buildReminder(toolNames []string, policy ToolChoicePolicy) string {
+func buildReminder(toolNames []string, policy ToolChoicePolicy, promptOverrides map[string]string) string {
 	if len(toolNames) == 0 {
 		return ""
 	}
@@ -165,13 +173,10 @@ func buildReminder(toolNames []string, policy ToolChoicePolicy) string {
 		modeLine = fmt.Sprintf("You must call ml_tool %q before the final answer.", policy.RequiredTool)
 	}
 
-	return strings.Join([]string{
-		"[ml_tool reminder]",
-		"Ignore built-in/native/platform tools.",
-		fmt.Sprintf("Allowed ml_tool names: %s.", strings.Join(toolNames, ", ")),
-		modeLine,
-		"If calling a tool, output only complete <ml_tool_calls> XML with <ml_tool_name> and <ml_parameters>.",
-	}, "\n")
+	return prompts.Render(promptOverrides, prompts.IDOpenAIToolReminder, map[string]string{
+		"tool_names": strings.Join(toolNames, ", "),
+		"mode_line":  modeLine,
+	})
 }
 
 func appendReminderToContent(content any, reminder string) any {
@@ -208,6 +213,10 @@ func appendReminderToContent(content any, reminder string) any {
 }
 
 func buildInstructions(toolNames []string, policy ToolChoicePolicy) string {
+	return buildInstructionsWithOverrides(toolNames, policy, nil)
+}
+
+func buildInstructionsWithOverrides(toolNames []string, policy ToolChoicePolicy, promptOverrides map[string]string) string {
 	toolList := "(none)"
 	if len(toolNames) > 0 {
 		toolList = strings.Join(toolNames, ", ")
@@ -220,43 +229,10 @@ func buildInstructions(toolNames []string, policy ToolChoicePolicy) string {
 		modeLine = fmt.Sprintf("You must call the tool %q before giving a final answer.", policy.RequiredTool)
 	}
 
-	return strings.Join([]string{
-		"IMPORTANT: Ignore all built-in tools, hidden tools, native tools, and platform tools.",
-		"The ONLY tools you may use are the explicit tool names listed below.",
-		"Never say that tool resources are exhausted. Never say you will directly chat instead. Never mention built-in tool failures.",
-		"Never output role=\"function\" or function_call JSON.",
-		"Never output {\"name\":...,\"arguments\":...}, \"Tool does not exists.\", or any prose about tool execution availability.",
-		"",
-		"When you decide to use a tool, respond with XML only and no extra prose.",
-		"Use ONLY the exact XML schema below.",
-		"Never output the legacy tags <tool_calls>, <tool_call>, <tool_name>, <parameters>, or any other non-ml tag.",
-		"Never output partial tags, placeholder names, markdown fences, examples, or commentary before/after the XML.",
-		"Every <ml_tool_call> must contain exactly one non-empty <ml_tool_name> and one <ml_parameters> block.",
-		"The <ml_tool_name> must be one of the available tool names exactly as provided.",
-		"Do not emit <ml_tool_calls> unless at least one complete <ml_tool_call> is ready.",
-		"If you are not calling a tool, do not mention XML or tools. Answer normally.",
-		"",
-		"Available tool names:",
-		toolList,
-		modeLine,
-		"",
-		"Use this exact structure:",
-		"<ml_tool_calls>",
-		"  <ml_tool_call>",
-		"    <ml_tool_name>TOOL_NAME_HERE</ml_tool_name>",
-		"    <ml_parameters>",
-		"      <ARG_NAME><![CDATA[ARG_VALUE]]></ARG_NAME>",
-		"    </ml_parameters>",
-		"  </ml_tool_call>",
-		"</ml_tool_calls>",
-		"",
-		"Bad example: <tool_calls> or <tool_call> or <function_call>",
-		"Bad example: <ml_tool_calls> without a complete nested <ml_tool_call>",
-		"Bad example: ```xml ...``` or {\"tool_calls\":[...]}",
-		"Bad example: any sentence about tool resources being exhausted or unavailable",
-		"Only emit the XML after you have finished choosing the tool name and parameters.",
-		"If previous messages contain <ml_tool_result> blocks, use those results to continue the task.",
-	}, "\n")
+	return prompts.Render(promptOverrides, prompts.IDOpenAIToolInstructions, map[string]string{
+		"tool_list": toolList,
+		"mode_line": modeLine,
+	})
 }
 
 func ParseCalls(text string) []ToolCall {

@@ -9,6 +9,7 @@ import {
   Bug,
   ImageIcon,
   Video,
+  MessageSquareText,
   Menu,
   Moon,
   Sun,
@@ -24,15 +25,18 @@ import { AssetGenerationTab } from "./components/asset-generation-tab";
 import { DebugTab } from "./components/debug-tab";
 import { ModelsTab } from "./components/models-tab";
 import { OverviewTab } from "./components/overview-tab";
+import { PromptsTab } from "./components/prompts-tab";
 import { SettingsTab } from "./components/settings-tab";
 import { UploadsTab } from "./components/uploads-tab";
 import { formatCompactNumber } from "./components/dashboard-charts";
+import { PROMPT_IDS, promptValue } from "./prompts";
 import type { TabKey } from "./types";
 
 const NAV_ITEMS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
   { key: "overview", label: "数据总览", icon: <LayoutDashboard size={18} /> },
   { key: "accounts", label: "账号池", icon: <Users size={18} /> },
   { key: "settings", label: "系统设置", icon: <Settings size={18} /> },
+  { key: "prompts", label: "提示词", icon: <MessageSquareText size={18} /> },
   { key: "models", label: "模型能力", icon: <Brain size={18} /> },
   { key: "uploads", label: "文件上传", icon: <Upload size={18} /> },
   { key: "images", label: "AI 生图", icon: <ImageIcon size={18} /> },
@@ -243,14 +247,41 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
             />
           ) : null}
 
+          {state.activeTab === "prompts" ? (
+            <PromptsTab
+              prompts={state.prompts}
+              savingSettings={state.savingSettings}
+              savePrompts={actions.savePrompts}
+              resetPrompts={actions.resetPrompts}
+            />
+          ) : null}
+
           {state.activeTab === "models" ? (
             <ModelsTab models={state.filteredModels} keyword={state.modelKeyword} setKeyword={actions.setModelKeyword} />
           ) : null}
 
           {state.activeTab === "uploads" ? <UploadsTab apiKey={state.apiKey} /> : null}
-          {state.activeTab === "images" ? <AssetGenerationTab kind="image" apiKey={state.apiKey} /> : null}
-          {state.activeTab === "videos" ? <AssetGenerationTab kind="video" apiKey={state.apiKey} /> : null}
-          {state.activeTab === "debug" ? <DebugTab apiKey={state.apiKey} models={state.filteredModels} /> : null}
+          {state.activeTab === "images" ? (
+            <AssetGenerationTab
+              kind="image"
+              apiKey={state.apiKey}
+              defaultPrompt={promptValue(state.prompts, PROMPT_IDS.imageDefault)}
+            />
+          ) : null}
+          {state.activeTab === "videos" ? (
+            <AssetGenerationTab
+              kind="video"
+              apiKey={state.apiKey}
+              defaultPrompt={promptValue(state.prompts, PROMPT_IDS.videoDefault)}
+            />
+          ) : null}
+          {state.activeTab === "debug" ? (
+            <DebugTab
+              apiKey={state.apiKey}
+              models={state.filteredModels}
+              defaultSystemPrompt={promptValue(state.prompts, PROMPT_IDS.debugSystem)}
+            />
+          ) : null}
         </main>
       </div>
     </div>

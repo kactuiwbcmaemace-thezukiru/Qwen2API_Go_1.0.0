@@ -154,6 +154,7 @@ func (h *Handler) buildLingmaChatRequest(payload chatRequest) (lingmaservice.Cha
 		Tools:             toolemulation.ExtractTools(payload.Tools),
 		ToolChoice:        toolemulation.ExtractToolChoice(payload.ToolChoice),
 		ParallelToolCalls: payload.ParallelToolCalls,
+		PromptOverrides:   h.promptOverrides(),
 		Temperature:       payload.Temperature,
 		TopP:              payload.TopP,
 		Stop:              lingmaStop(payload.Stop),

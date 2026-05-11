@@ -8,10 +8,18 @@ import { EndpointItem } from "./primitives";
 
 const reasoningEffortOptions = ["", "none", "minimal", "low", "medium", "high", "xhigh"] as const;
 
-export function DebugTab({ apiKey, models }: { apiKey: string; models: ModelItem[] }) {
+export function DebugTab({
+  apiKey,
+  models,
+  defaultSystemPrompt,
+}: {
+  apiKey: string;
+  models: ModelItem[];
+  defaultSystemPrompt?: string;
+}) {
   const availableModels = useMemo(() => models.map((item) => item.id), [models]);
   const [model, setModel] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState("你是一个用于后台调试的助手，请直接、简洁地回答。");
+  const [systemPrompt, setSystemPrompt] = useState(defaultSystemPrompt || "你是一个用于后台调试的助手，请直接、简洁地回答。");
   const [message, setMessage] = useState("你好，请简单介绍一下你自己。");
   const [temperature, setTemperature] = useState("0.7");
   const [maxTokens, setMaxTokens] = useState("1024");

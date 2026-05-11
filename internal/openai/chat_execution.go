@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"qwen2api/internal/prompts"
 	"qwen2api/internal/qwen"
 	"qwen2api/internal/storage"
 	"qwen2api/internal/toolcall"
@@ -121,7 +122,8 @@ func (h *Handler) prepareChatRequest(ctx context.Context, payload executedChatRe
 	chatType := chatTypeForModel(payload.Model)
 	model, _ := h.ResolveModel(ctx, payload.Model, chatType)
 	thinkingMode := resolveThinkingMode(payload.Model, payload.ReasoningEffort, payload.NestedReasoningEffort, payload.EnableThinking)
-	injection := toolcall.InjectPrompt(payload.Messages, payload.Tools, payload.ToolChoice)
+	messages := injectQwenWeb2ControlPrompt(payload.Messages, h.qwenWeb2ControlPrompt())
+	injection := toolcall.InjectPromptWithOverrides(messages, payload.Tools, payload.ToolChoice, h.promptOverrides())
 	expandedMessages := cloneMessageList(injection.Messages)
 	fullUpstreamMessages := normalizeMessages(cloneMessageList(expandedMessages), chatType, thinkingMode)
 
@@ -143,6 +145,44 @@ func (h *Handler) prepareChatRequest(ctx context.Context, payload executedChatRe
 		ContextHash:          computeContextHash(model, chatType, injection.ToolNames, expandedMessages),
 		ToolNames:            injection.ToolNames,
 	}
+}
+
+func (h *Handler) qwenWeb2ControlPrompt() string {
+	return h.promptValue(prompts.IDQwenWeb2Control)
+}
+
+func (h *Handler) promptValue(id string) string {
+	if h == nil {
+		return ""
+	}
+	if h.runtime != nil {
+		return prompts.Resolve(h.runtime.Snapshot().PromptOverrides, id)
+	}
+	return prompts.Resolve(h.cfg.PromptOverrides, id)
+}
+
+func (h *Handler) promptOverrides() map[string]string {
+	if h == nil {
+		return nil
+	}
+	if h.runtime != nil {
+		return h.runtime.Snapshot().PromptOverrides
+	}
+	return prompts.CloneOverrides(h.cfg.PromptOverrides)
+}
+
+func injectQwenWeb2ControlPrompt(messages []map[string]any, prompt string) []map[string]any {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return messages
+	}
+	injected := make([]map[string]any, 0, len(messages)+1)
+	injected = append(injected, map[string]any{
+		"role":    "system",
+		"content": prompt,
+	})
+	injected = append(injected, messages...)
+	return injected
 }
 
 func selectIncrementalTailMessages(messages []map[string]any) []map[string]any {

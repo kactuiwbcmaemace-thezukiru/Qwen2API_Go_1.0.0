@@ -1,9 +1,12 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
+
+	"qwen2api/internal/prompts"
 )
 
 type Config struct {
@@ -27,6 +30,7 @@ type Config struct {
 	MaxLogFileSize        int
 	MaxLogFiles           int
 	QwenChatProxyURL      string
+	QwenWeb2ControlPrompt string
 	ProxyURL              string
 	ChatCleanupMode       int
 	LingmaBackend         string
@@ -41,6 +45,7 @@ type Config struct {
 	LingmaPipe            string
 	LingmaWebSocketURL    string
 	LingmaSessionMode     string
+	PromptOverrides       map[string]string
 }
 
 func Load() Config {
@@ -49,6 +54,13 @@ func Load() Config {
 	if len(apiKeys) > 0 {
 		adminKey = apiKeys[0]
 	}
+	promptOverrides := parsePromptOverrides(os.Getenv("PROMPT_OVERRIDES_JSON"))
+	if legacyPrompt := getPromptEnv("QWEN_WEB2_CONTROL_PROMPT"); legacyPrompt != "" {
+		if _, ok := promptOverrides[prompts.IDQwenWeb2Control]; !ok {
+			promptOverrides[prompts.IDQwenWeb2Control] = legacyPrompt
+		}
+	}
+	promptOverrides = prompts.NormalizeOverrides(promptOverrides)
 
 	return Config{
 		DataSaveMode:          getEnv("DATA_SAVE_MODE", "none"),
@@ -71,6 +83,7 @@ func Load() Config {
 		MaxLogFileSize:        getEnvInt("MAX_LOG_FILE_SIZE", 10),
 		MaxLogFiles:           getEnvInt("MAX_LOG_FILES", 5),
 		QwenChatProxyURL:      getEnv("QWEN_CHAT_PROXY_URL", "https://chat.qwen.ai"),
+		QwenWeb2ControlPrompt: prompts.Resolve(promptOverrides, prompts.IDQwenWeb2Control),
 		ProxyURL:              os.Getenv("PROXY_URL"),
 		ChatCleanupMode:       getEnvInt("CHAT_CLEANUP_MODE", 0),
 		LingmaBackend:         getEnv("LINGMA_BACKEND", "remote"),
@@ -85,6 +98,7 @@ func Load() Config {
 		LingmaPipe:            os.Getenv("LINGMA_PIPE"),
 		LingmaWebSocketURL:    os.Getenv("LINGMA_WEBSOCKET_URL"),
 		LingmaSessionMode:     getEnv("LINGMA_SESSION_MODE", "auto"),
+		PromptOverrides:       promptOverrides,
 	}
 }
 
@@ -126,6 +140,26 @@ func getEnv(key string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getPromptEnv(key string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return ""
+	}
+	return strings.ReplaceAll(value, `\n`, "\n")
+}
+
+func parsePromptOverrides(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]string{}
+	}
+	values := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return map[string]string{}
+	}
+	return values
 }
 
 func getEnvBool(key string, fallback bool) bool {

@@ -3,6 +3,8 @@ package toolcall
 import (
 	"strings"
 	"testing"
+
+	"qwen2api/internal/prompts"
 )
 
 func TestProcessStreamChunkKeepsUTF8Boundary(t *testing.T) {
@@ -213,6 +215,28 @@ func TestInjectPromptAppendsReminderToLatestMessage(t *testing.T) {
 	}
 	if !strings.HasPrefix(lastContent, "[ml_tool reminder]") {
 		t.Fatalf("expected reminder before latest user content\n%s", lastContent)
+	}
+}
+
+func TestInjectPromptUsesPromptOverrides(t *testing.T) {
+	result := InjectPromptWithOverrides([]map[string]any{
+		{"role": "user", "content": "run ls"},
+	}, []any{
+		map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "shell",
+				"description": "run shell",
+				"parameters":  map[string]any{"type": "object"},
+			},
+		},
+	}, "auto", map[string]string{
+		prompts.IDOpenAIToolInstructions: "CUSTOM {{tool_list}} {{mode_line}}",
+	})
+
+	content := normalizeMessageTextContent(result.Messages[0]["content"])
+	if !strings.Contains(content, "CUSTOM shell") {
+		t.Fatalf("custom instructions missing from content: %q", content)
 	}
 }
 

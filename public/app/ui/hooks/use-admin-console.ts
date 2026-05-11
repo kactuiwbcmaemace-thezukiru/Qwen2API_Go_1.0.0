@@ -2,6 +2,7 @@
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from "react";
 import { apiRequest, STORAGE_KEY } from "../api";
+import { normalizePromptsResponse } from "../prompts";
 import type {
   AccountsResponse,
   BatchTaskResponse,
@@ -9,6 +10,7 @@ import type {
   ModelItem,
   ModelsResponse,
   OverviewResponse,
+  PromptsResponse,
   SettingsResponse,
   TabKey,
   ThemeMode,
@@ -57,6 +59,7 @@ export function useAdminConsole(initialTab?: TabKey) {
   const [toast, setToast] = useState<ToastState>(null);
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
+  const [prompts, setPrompts] = useState<PromptsResponse | null>(null);
   const [accounts, setAccounts] = useState<AccountsResponse | null>(null);
   const [models, setModels] = useState<ModelItem[]>([]);
   const [batchTask, setBatchTask] = useState<BatchTaskResponse | null>(null);
@@ -116,14 +119,16 @@ export function useAdminConsole(initialTab?: TabKey) {
     }
 
     try {
-      const [overviewRes, settingsRes, modelsRes] = await Promise.all([
+      const [overviewRes, settingsRes, promptsRes, modelsRes] = await Promise.all([
         apiRequest<OverviewResponse>("/api/dashboard/overview", {}, requestKey),
         apiRequest<SettingsResponse>("/api/settings", {}, requestKey),
+        apiRequest<PromptsResponse>("/api/prompts", {}, requestKey),
         apiRequest<ModelsResponse>("/api/models", {}, requestKey),
       ]);
 
       setOverview(overviewRes);
       setSettings(settingsRes);
+      setPrompts(normalizePromptsResponse(promptsRes));
       setModels(modelsRes.data || []);
     } catch (error) {
       setToast({ type: "error", message: error instanceof Error ? error.message : "加载控制台失败" });
@@ -302,6 +307,7 @@ export function useAdminConsole(initialTab?: TabKey) {
       toast,
       overview,
       settings,
+      prompts,
       accounts,
       filteredModels,
       modelCounts,
@@ -342,6 +348,12 @@ export function useAdminConsole(initialTab?: TabKey) {
       setAddKeyValue,
       setThresholdHours,
       setSettings,
+      savePrompts: async (updates: Record<string, string>) => {
+        await saveSettings("/api/prompts", { prompts: updates }, "提示词配置已更新。");
+      },
+      resetPrompts: async (ids: string[]) => {
+        await saveSettings("/api/prompts/reset", { ids }, ids.length ? "提示词已恢复默认。" : "全部提示词已恢复默认。");
+      },
       setActiveTab,
       saveChatCleanupMode: async (mode: number) => {
         await saveSettings("/api/setChatCleanupMode", { chatCleanupMode: mode }, "对话清理模式已更新。");

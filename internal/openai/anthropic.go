@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"qwen2api/internal/prompts"
 	"qwen2api/internal/toolcall"
 )
 
@@ -124,7 +125,7 @@ func (h *Handler) HandleAnthropicMessages(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	executedRequest, err := convertAnthropicRequest(payload)
+	executedRequest, err := convertAnthropicRequestWithOverrides(payload, h.promptOverrides())
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -184,13 +185,17 @@ func validateAnthropicVersion(r *http.Request) error {
 }
 
 func convertAnthropicRequest(payload anthropicRequest) (executedChatRequest, error) {
+	return convertAnthropicRequestWithOverrides(payload, nil)
+}
+
+func convertAnthropicRequestWithOverrides(payload anthropicRequest, promptOverrides map[string]string) (executedChatRequest, error) {
 	messages := make([]map[string]any, 0, len(payload.Messages)+1)
 
 	systemText, err := normalizeAnthropicSystem(payload.System)
 	if err != nil {
 		return executedChatRequest{}, err
 	}
-	if responseFormatInstruction := anthropicResponseFormatInstruction(payload.ResponseFormat); responseFormatInstruction != "" {
+	if responseFormatInstruction := anthropicResponseFormatInstructionWithOverrides(payload.ResponseFormat, promptOverrides); responseFormatInstruction != "" {
 		if systemText != "" {
 			systemText += "\n\n"
 		}
@@ -475,6 +480,10 @@ func anthropicThinkingEffort(raw json.RawMessage) any {
 }
 
 func anthropicResponseFormatInstruction(raw json.RawMessage) string {
+	return anthropicResponseFormatInstructionWithOverrides(raw, nil)
+}
+
+func anthropicResponseFormatInstructionWithOverrides(raw json.RawMessage, promptOverrides map[string]string) string {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return ""
 	}
@@ -485,15 +494,15 @@ func anthropicResponseFormatInstruction(raw json.RawMessage) string {
 	formatType := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["type"])))
 	switch formatType {
 	case "json_object":
-		return "Respond with a valid JSON object only."
+		return prompts.Resolve(promptOverrides, prompts.IDAnthropicJSONObject)
 	case "json_schema":
 		if schema, ok := payload["json_schema"]; ok {
 			rawSchema, _ := json.Marshal(schema)
 			if len(rawSchema) > 0 {
-				return "Respond with JSON that conforms to this schema: " + string(rawSchema)
+				return prompts.Render(promptOverrides, prompts.IDAnthropicJSONSchema, map[string]string{"schema": string(rawSchema)})
 			}
 		}
-		return "Respond with valid JSON that conforms to the requested schema."
+		return prompts.Resolve(promptOverrides, prompts.IDAnthropicJSONSchemaFallback)
 	default:
 		return ""
 	}

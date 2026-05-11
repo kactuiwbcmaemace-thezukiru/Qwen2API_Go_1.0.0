@@ -17,6 +17,7 @@ import (
 	"qwen2api/internal/lingma/lingmaipc"
 	"qwen2api/internal/lingma/remote"
 	"qwen2api/internal/lingma/toolemulation"
+	"qwen2api/internal/prompts"
 )
 
 type BackendMode string
@@ -78,6 +79,7 @@ type ChatRequest struct {
 	Tools             []toolemulation.ToolDef
 	ToolChoice        toolemulation.ToolChoice
 	ParallelToolCalls *bool
+	PromptOverrides   map[string]string
 
 	// Generation parameters (passed through for API compatibility;
 	// actual effect depends on Lingma backend support)
@@ -571,7 +573,7 @@ func requestForImageContext(req ChatRequest) ChatRequest {
 		if text == "" {
 			text = imagePromptFallback(req, i)
 		} else {
-			text = "请只根据图片内容回答用户这条问题，忽略更早的对话历史：" + text
+			text = prompts.Render(req.PromptOverrides, prompts.IDLingmaImageQuestion, map[string]string{"text": text})
 		}
 		out.Messages = []ChatMessage{{
 			Role:   "user",
@@ -589,15 +591,15 @@ func imagePromptFallback(req ChatRequest, imageMessageIndex int) string {
 		message := req.Messages[i]
 		if strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 			if text := strings.TrimSpace(message.Text); text != "" {
-				return "请只根据图片内容回答用户这条问题，忽略更早的对话历史：" + text
+				return prompts.Render(req.PromptOverrides, prompts.IDLingmaImageQuestion, map[string]string{"text": text})
 			}
 		}
 	}
 	system := strings.TrimSpace(req.System)
 	if system != "" && len([]rune(system)) <= 1000 {
-		return "请只根据图片内容回答这条要求：" + system
+		return prompts.Render(req.PromptOverrides, prompts.IDLingmaImageSystem, map[string]string{"system": system})
 	}
-	return "请描述这张图片的主要内容。"
+	return prompts.Resolve(req.PromptOverrides, prompts.IDLingmaImageDescribe)
 }
 
 func requestWithImageContext(req ChatRequest, imageContext string) ChatRequest {
@@ -877,7 +879,7 @@ func (s *Service) applyToolEmulation(
 			result.Text = remaining
 			result.ToolCalls = calls
 		} else if shouldRetryTooling(req.ToolChoice, result.Text) {
-			hintPrompt := prompt + "\n\n" + toolemulation.ForceToolingPrompt(req.ToolChoice)
+			hintPrompt := prompt + "\n\n" + toolemulation.ForceToolingPromptWithOverrides(req.ToolChoice, req.PromptOverrides)
 			retryText := ""
 			if retry != nil {
 				text, outputTokens, retryErr := retry(hintPrompt)
@@ -1303,7 +1305,7 @@ func extractLastUserImages(messages []ChatMessage) []Image {
 }
 
 func buildLingmaPrompt(req ChatRequest, mode SessionMode, emulateTools bool) (string, error) {
-	messages := filteredMessages(req.Messages)
+	messages := filteredMessages(req.Messages, req.PromptOverrides)
 	var lastUser string
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
@@ -1325,7 +1327,7 @@ func buildLingmaPrompt(req ChatRequest, mode SessionMode, emulateTools bool) (st
 
 	system := strings.TrimSpace(req.System)
 	if emulateTools && len(req.Tools) > 0 && req.ToolChoice.Mode != "none" {
-		system = toolemulation.InjectTooling(system, req.Tools, req.ToolChoice, req.ParallelToolCalls)
+		system = toolemulation.InjectToolingWithOverrides(system, req.Tools, req.ToolChoice, req.ParallelToolCalls, req.PromptOverrides)
 	}
 
 	if system == "" && len(messages) == 1 {
@@ -1351,10 +1353,10 @@ func buildLingmaPrompt(req ChatRequest, mode SessionMode, emulateTools bool) (st
 	}
 
 	parts := make([]string, 0, len(messages)+4)
+	systemBlock := ""
 	if system != "" {
-		parts = append(parts, "System instructions:", system)
+		systemBlock = strings.TrimSpace("System instructions:\n\n" + system)
 	}
-	parts = append(parts, "Conversation transcript:")
 	for _, message := range messages {
 		role := "User"
 		if message.Role == "assistant" {
@@ -1362,8 +1364,10 @@ func buildLingmaPrompt(req ChatRequest, mode SessionMode, emulateTools bool) (st
 		}
 		parts = append(parts, fmt.Sprintf("%s: %s", role, message.Text))
 	}
-	parts = append(parts, "Reply as the assistant to the latest user message only. Follow the system instructions and prior transcript naturally.")
-	return strings.Join(parts, "\n\n"), nil
+	return prompts.Render(req.PromptOverrides, prompts.IDLingmaTranscript, map[string]string{
+		"system_block": systemBlock,
+		"conversation": strings.Join(parts, "\n\n"),
+	}), nil
 }
 
 func latestImageMessageIndex(messages []ChatMessage) int {
@@ -1378,7 +1382,7 @@ func latestImageMessageIndex(messages []ChatMessage) int {
 	return -1
 }
 
-func filteredMessages(messages []ChatMessage) []ChatMessage {
+func filteredMessages(messages []ChatMessage, promptOverrides map[string]string) []ChatMessage {
 	out := make([]ChatMessage, 0, len(messages))
 	for _, message := range messages {
 		role := strings.ToLower(strings.TrimSpace(message.Role))
@@ -1387,7 +1391,7 @@ func filteredMessages(messages []ChatMessage) []ChatMessage {
 			continue
 		}
 		if role == "tool" {
-			text = toolemulation.ActionOutputPrompt(message.ToolCallID, text)
+			text = toolemulation.ActionOutputPromptWithOverrides(message.ToolCallID, text, promptOverrides)
 			role = "user"
 		}
 		if role != "user" && role != "assistant" {

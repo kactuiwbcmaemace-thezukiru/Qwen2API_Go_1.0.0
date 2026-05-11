@@ -2,9 +2,12 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
+
+	"qwen2api/internal/prompts"
 )
 
 const DefaultEnvPath = ".env"
@@ -30,6 +33,8 @@ SERVICE_PORT=3000
 
 # Upstream endpoint
 QWEN_CHAT_PROXY_URL=https://chat.qwen.ai
+QWEN_WEB2_CONTROL_PROMPT=
+PROMPT_OVERRIDES_JSON={}
 
 # Lingma built-in provider
 LINGMA_BACKEND=remote
@@ -128,6 +133,8 @@ func RuntimeSnapshotFromConfig(cfg Config) RuntimeSnapshot {
 		SearchInfoMode:        cfg.SearchInfoMode,
 		SimpleModelMap:        cfg.SimpleModelMap,
 		ChatCleanupMode:       cfg.ChatCleanupMode,
+		QwenWeb2ControlPrompt: cfg.QwenWeb2ControlPrompt,
+		PromptOverrides:       prompts.CloneOverrides(cfg.PromptOverrides),
 	}
 }
 
@@ -210,13 +217,36 @@ func SaveDotEnvValues(path string, updates map[string]string) error {
 }
 
 func RuntimeSnapshotToEnv(snapshot RuntimeSnapshot) map[string]string {
+	overrides := prompts.CloneOverrides(snapshot.PromptOverrides)
+	overrides[prompts.IDQwenWeb2Control] = snapshot.QwenWeb2ControlPrompt
+	overrides = prompts.NormalizeOverrides(overrides)
 	return map[string]string{
-		"AUTO_REFRESH":            strconv.FormatBool(snapshot.AutoRefresh),
-		"AUTO_REFRESH_INTERVAL":   strconv.Itoa(snapshot.AutoRefreshInterval),
-		"BATCH_LOGIN_CONCURRENCY": strconv.Itoa(snapshot.BatchLoginConcurrency),
-		"SIMPLE_MODEL_MAP":        strconv.FormatBool(snapshot.SimpleModelMap),
-		"SEARCH_INFO_MODE":        snapshot.SearchInfoMode,
-		"OUTPUT_THINK":            strconv.FormatBool(snapshot.OutThink),
-		"CHAT_CLEANUP_MODE":       strconv.Itoa(snapshot.ChatCleanupMode),
+		"AUTO_REFRESH":             strconv.FormatBool(snapshot.AutoRefresh),
+		"AUTO_REFRESH_INTERVAL":    strconv.Itoa(snapshot.AutoRefreshInterval),
+		"BATCH_LOGIN_CONCURRENCY":  strconv.Itoa(snapshot.BatchLoginConcurrency),
+		"SIMPLE_MODEL_MAP":         strconv.FormatBool(snapshot.SimpleModelMap),
+		"SEARCH_INFO_MODE":         snapshot.SearchInfoMode,
+		"OUTPUT_THINK":             strconv.FormatBool(snapshot.OutThink),
+		"CHAT_CLEANUP_MODE":        strconv.Itoa(snapshot.ChatCleanupMode),
+		"QWEN_WEB2_CONTROL_PROMPT": encodePromptEnvValue(snapshot.QwenWeb2ControlPrompt),
+		"PROMPT_OVERRIDES_JSON":    encodePromptOverrides(overrides),
 	}
+}
+
+func encodePromptEnvValue(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	return strings.ReplaceAll(value, "\n", `\n`)
+}
+
+func encodePromptOverrides(overrides map[string]string) string {
+	overrides = prompts.NormalizeOverrides(overrides)
+	if len(overrides) == 0 {
+		return "{}"
+	}
+	raw, err := json.Marshal(overrides)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
 }

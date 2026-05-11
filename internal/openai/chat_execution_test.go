@@ -49,6 +49,40 @@ func TestNormalizeMessagesKeepsToolReminderNearLatestTurn(t *testing.T) {
 	}
 }
 
+func TestInjectQwenWeb2ControlPromptPrependsSystemPrompt(t *testing.T) {
+	messages := injectQwenWeb2ControlPrompt([]map[string]any{
+		{"role": "system", "content": "user system"},
+		{"role": "developer", "content": "developer note"},
+		{"role": "user", "content": "hello"},
+	}, "backend control")
+
+	injected := toolcall.InjectPrompt(messages, nil, nil)
+	normalized := normalizeMessages(cloneMessageList(injected.Messages), "t2t", thinkingModeFast)
+	if len(normalized) != 1 {
+		t.Fatalf("normalized len = %d, want 1", len(normalized))
+	}
+
+	content := extractText(normalized[0]["content"])
+	backendIndex := strings.Index(content, "backend control")
+	userSystemIndex := strings.Index(content, "user system")
+	developerIndex := strings.Index(content, "developer note")
+	if backendIndex < 0 || userSystemIndex < 0 || developerIndex < 0 {
+		t.Fatalf("content missing expected prompts: %q", content)
+	}
+	if backendIndex > userSystemIndex || backendIndex > developerIndex {
+		t.Fatalf("backend prompt should be first, got %q", content)
+	}
+}
+
+func TestInjectQwenWeb2ControlPromptEmptyKeepsMessages(t *testing.T) {
+	messages := []map[string]any{{"role": "user", "content": "hello"}}
+	got := injectQwenWeb2ControlPrompt(messages, "")
+
+	if len(got) != 1 || got[0]["content"] != "hello" {
+		t.Fatalf("messages = %#v, want unchanged", got)
+	}
+}
+
 func TestSelectIncrementalTailMessagesKeepsTrailingToolResultsBeforeLatestTurn(t *testing.T) {
 	selected := selectIncrementalTailMessages([]map[string]any{
 		{"role": "user", "content": "第一轮问题"},

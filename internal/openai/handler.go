@@ -21,6 +21,7 @@ import (
 	lingmaservice "qwen2api/internal/lingma/service"
 	"qwen2api/internal/logging"
 	"qwen2api/internal/metrics"
+	"qwen2api/internal/prompts"
 	"qwen2api/internal/qwen"
 	"qwen2api/internal/storage"
 	"qwen2api/internal/toolcall"
@@ -1595,7 +1596,7 @@ func (h *Handler) HandleImagesEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	prompt := r.FormValue("prompt")
 	if strings.TrimSpace(prompt) == "" {
-		prompt = "请基于上传图片完成编辑"
+		prompt = h.promptValue(prompts.IDImageEditDefault)
 	}
 	model := r.FormValue("model")
 	size := normalizeSize(r.FormValue("size"))

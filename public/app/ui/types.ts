@@ -89,6 +89,24 @@ export type SettingsResponse = {
   searchInfoMode: "table" | "text";
   simpleModelMap: boolean;
   chatCleanupMode: number;
+  qwenWeb2ControlPrompt: string;
+};
+
+export type PromptItem = {
+  id: string;
+  category: string;
+  title: string;
+  description: string;
+  defaultValue: string;
+  value: string;
+  risk: string;
+  placeholders: string[];
+  modified: boolean;
+};
+
+export type PromptsResponse = {
+  data: PromptItem[];
+  categories: string[];
 };
 
 export type AccountStatus = "valid" | "expiringSoon" | "expired" | "invalid";
@@ -210,6 +228,6 @@ export type ToastState = {
 
 export type Tone = "default" | "success" | "warning" | "danger";
 
-export type TabKey = "overview" | "accounts" | "settings" | "models" | "uploads" | "debug" | "images" | "videos";
+export type TabKey = "overview" | "accounts" | "settings" | "prompts" | "models" | "uploads" | "debug" | "images" | "videos";
 
 export type ThemeMode = "light" | "dark";

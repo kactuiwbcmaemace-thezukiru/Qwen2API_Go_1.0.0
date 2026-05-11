@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"qwen2api/internal/config"
 	lingmaservice "qwen2api/internal/lingma/service"
 	"qwen2api/internal/logging"
 	"qwen2api/internal/metrics"
@@ -68,6 +69,28 @@ func TestBuildLingmaRequestRestoresDashscopePrefixForShortPublicModel(t *testing
 	}
 	if responseModel != "qwen_max_latest-lingma" {
 		t.Fatalf("response model = %q, want qwen_max_latest-lingma", responseModel)
+	}
+}
+
+func TestBuildLingmaRequestIgnoresQwenWeb2ControlPrompt(t *testing.T) {
+	handler := &Handler{
+		runtime: config.NewRuntime(config.Config{QwenWeb2ControlPrompt: "backend control"}),
+	}
+	request, _, err := handler.buildLingmaChatRequest(chatRequest{
+		Model: "qwen_max_latest-lingma",
+		Messages: []map[string]any{
+			{"role": "system", "content": "user system"},
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.System != "user system" {
+		t.Fatalf("request.System = %q, want user system", request.System)
+	}
+	if strings.Contains(request.System, "backend control") {
+		t.Fatalf("request.System leaked qwen control prompt: %q", request.System)
 	}
 }
 

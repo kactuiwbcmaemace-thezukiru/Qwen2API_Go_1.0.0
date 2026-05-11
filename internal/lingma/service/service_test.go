@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"qwen2api/internal/lingma/toolemulation"
+	"qwen2api/internal/prompts"
 )
 
 func TestIsRecoverableIPCError(t *testing.T) {
@@ -92,6 +93,33 @@ func TestBuildLingmaPromptOnlyInjectsToolingWhenEmulationEnabled(t *testing.T) {
 	}
 	if !strings.Contains(ipcPrompt, "```json action") || !strings.Contains(ipcPrompt, "DIRECT tool access") {
 		t.Fatalf("ipc prompt should include tool emulation:\n%s", ipcPrompt)
+	}
+}
+
+func TestBuildLingmaPromptUsesPromptOverrides(t *testing.T) {
+	req := ChatRequest{
+		Messages: []ChatMessage{{Role: "user", Text: "查看项目结构"}},
+		Tools: []toolemulation.ToolDef{{
+			Name: "Bash",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"command": map[string]any{"type": "string"},
+				},
+				"required": []any{"command"},
+			},
+		}},
+		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
+		PromptOverrides: map[string]string{
+			prompts.IDLingmaTooling: "CUSTOM TOOLING\n{{tool_lines}}\n{{force_constraint}}",
+		},
+	}
+
+	prompt, err := buildLingmaPrompt(req, SessionModeFresh, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "CUSTOM TOOLING") || !strings.Contains(prompt, "Bash(command)") {
+		t.Fatalf("custom lingma prompt missing rendered values:\n%s", prompt)
 	}
 }
 

@@ -78,13 +78,14 @@ const CONFIGS: Record<AssetKind, AssetGenerationConfig> = {
   },
 };
 
-export function AssetGenerationTab({ kind, apiKey }: { kind: AssetKind; apiKey: string }) {
+export function AssetGenerationTab({ kind, apiKey, defaultPrompt }: { kind: AssetKind; apiKey: string; defaultPrompt?: string }) {
   const config = CONFIGS[kind];
+  const configuredDefaultPrompt = defaultPrompt || config.defaultPrompt;
   const Icon = kind === "image" ? ImageIcon : Video;
   const sizeOptions = kind === "video" ? VIDEO_SIZE_OPTIONS : IMAGE_SIZE_OPTIONS;
   const [models, setModels] = useState<ModelItem[]>([]);
   const [model, setModel] = useState("");
-  const [prompt, setPrompt] = useState(config.defaultPrompt);
+  const [prompt, setPrompt] = useState(configuredDefaultPrompt);
   const [size, setSize] = useState(sizeOptions[0].value);
   const [loading, setLoading] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -272,7 +273,7 @@ export function AssetGenerationTab({ kind, apiKey }: { kind: AssetKind; apiKey: 
               className="admin-btn admin-btn-secondary"
               disabled={loading}
               onClick={() => {
-                setPrompt(config.defaultPrompt);
+                setPrompt(configuredDefaultPrompt);
                 setResult(null);
                 setRaw("");
                 setError("");

@@ -1127,6 +1127,123 @@ body {
   font-size: 12px;
 }
 
+.prompts-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.prompts-sidebar {
+  position: sticky;
+  top: 88px;
+}
+
+.prompts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.prompt-mini-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.prompt-mini-stats div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface);
+}
+
+.prompt-mini-stats strong,
+.prompt-mini-stats span {
+  display: block;
+}
+
+.prompt-mini-stats strong {
+  font-size: 18px;
+}
+
+.prompt-mini-stats span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.prompt-editor {
+  overflow: hidden;
+}
+
+.prompt-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.prompt-title-row h3 {
+  margin-right: 4px;
+}
+
+.prompt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface);
+}
+
+.prompt-badge.changed,
+.prompt-badge.unsaved {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-light);
+}
+
+.prompt-badge.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-light);
+}
+
+.prompt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.prompt-meta code,
+.prompt-placeholders code {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  background: var(--surface-hover);
+  color: var(--text);
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+.prompt-placeholders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.prompt-textarea {
+  min-height: 180px;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 13px;
+}
+
 /* Responsive */
 @media (max-width: 1024px) {
   .admin-stat-grid,
@@ -1142,6 +1259,12 @@ body {
   }
   .asset-tool-grid {
     grid-template-columns: 1fr;
+  }
+  .prompts-layout {
+    grid-template-columns: 1fr;
+  }
+  .prompts-sidebar {
+    position: static;
   }
 }
 
