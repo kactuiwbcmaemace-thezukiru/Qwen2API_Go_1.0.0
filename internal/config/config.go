@@ -33,18 +33,16 @@ type Config struct {
 	QwenWeb2ControlPrompt string
 	ProxyURL              string
 	ChatCleanupMode       int
-	LingmaBackend         string
 	LingmaModel           string
 	LingmaRemoteBaseURL   string
 	LingmaRemoteAuthFile  string
 	LingmaRemoteVersion   string
+	LingmaRemoteService   string
+	LingmaRemoteFetchKeys string
+	LingmaRemoteChatTask  string
 	LingmaTimeoutSeconds  int
 	LingmaFallback        bool
 	LingmaFallbackModels  []string
-	LingmaTransport       string
-	LingmaPipe            string
-	LingmaWebSocketURL    string
-	LingmaSessionMode     string
 	PromptOverrides       map[string]string
 }
 
@@ -86,18 +84,16 @@ func Load() Config {
 		QwenWeb2ControlPrompt: prompts.Resolve(promptOverrides, prompts.IDQwenWeb2Control),
 		ProxyURL:              os.Getenv("PROXY_URL"),
 		ChatCleanupMode:       getEnvInt("CHAT_CLEANUP_MODE", 0),
-		LingmaBackend:         getEnv("LINGMA_BACKEND", "remote"),
 		LingmaModel:           getEnv("LINGMA_MODEL", "kmodel"),
 		LingmaRemoteBaseURL:   os.Getenv("LINGMA_REMOTE_BASE_URL"),
-		LingmaRemoteAuthFile:  os.Getenv("LINGMA_REMOTE_AUTH_FILE"),
+		LingmaRemoteAuthFile:  getEnv("LINGMA_REMOTE_AUTH_FILE", "data/data.json"),
 		LingmaRemoteVersion:   os.Getenv("LINGMA_REMOTE_VERSION"),
+		LingmaRemoteService:   getEnv("LINGMA_REMOTE_SERVICE", "agent_chat_generation"),
+		LingmaRemoteFetchKeys: os.Getenv("LINGMA_REMOTE_FETCH_KEYS"),
+		LingmaRemoteChatTask:  getEnv("LINGMA_REMOTE_CHAT_TASK", "question_refine"),
 		LingmaTimeoutSeconds:  getEnvInt("LINGMA_TIMEOUT_SECONDS", 0),
 		LingmaFallback:        getEnvBool("LINGMA_REMOTE_FALLBACK_ENABLED", true),
 		LingmaFallbackModels:  parseCSV(os.Getenv("LINGMA_REMOTE_FALLBACK_MODELS")),
-		LingmaTransport:       getEnv("LINGMA_TRANSPORT", "auto"),
-		LingmaPipe:            os.Getenv("LINGMA_PIPE"),
-		LingmaWebSocketURL:    os.Getenv("LINGMA_WEBSOCKET_URL"),
-		LingmaSessionMode:     getEnv("LINGMA_SESSION_MODE", "auto"),
 		PromptOverrides:       promptOverrides,
 	}
 }

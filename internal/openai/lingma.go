@@ -87,11 +87,15 @@ func (h *Handler) handleLingmaChatCompletion(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "Lingma service is not configured"})
 		return
 	}
+	start := time.Now()
 
 	request, responseModel, err := h.buildLingmaChatRequest(payload)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
+	}
+	if h.logger != nil {
+		h.logger.InfoModule("OPENAI", "Lingma调用开始 %s model=%s response_model=%s stream=%t", accountLogPrefix("lingma"), request.Model, responseModel, payload.Stream)
 	}
 
 	if payload.Stream {
@@ -101,8 +105,18 @@ func (h *Handler) handleLingmaChatCompletion(w http.ResponseWriter, r *http.Requ
 
 	result, err := h.lingma.Generate(r.Context(), request)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.WarnModule("OPENAI", "Lingma调用失败 %s model=%s duration=%s err=%v", accountLogPrefix("lingma"), request.Model, time.Since(start), err)
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
+	}
+	if h.logger != nil {
+		label := strings.TrimSpace(result.CredentialSrc)
+		if label == "" {
+			label = "lingma"
+		}
+		h.logger.InfoModule("OPENAI", "Lingma调用完成 %s model=%s request_id=%s duration=%s", accountLogPrefix(label), request.Model, result.RequestID, time.Since(start))
 	}
 	h.writeLingmaNonStream(w, result, responseModel, estimatedPromptTokens)
 }
@@ -330,8 +344,12 @@ func (h *Handler) writeLingmaNonStream(w http.ResponseWriter, result *lingmaserv
 }
 
 func (h *Handler) handleLingmaStream(w http.ResponseWriter, r *http.Request, request lingmaservice.ChatRequest, model string, estimatedPromptTokens int) {
+	start := time.Now()
 	events, done, err := h.lingma.GenerateStream(r.Context(), request)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.WarnModule("OPENAI", "Lingma调用失败 %s mode=stream model=%s duration=%s err=%v", accountLogPrefix("lingma"), request.Model, time.Since(start), err)
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
@@ -391,12 +409,18 @@ func (h *Handler) handleLingmaStream(w http.ResponseWriter, r *http.Request, req
 	}
 
 	if finalErr != nil {
+		if h.logger != nil {
+			h.logger.WarnModule("OPENAI", "Lingma调用失败 %s mode=stream model=%s duration=%s err=%v", accountLogPrefix("lingma"), request.Model, time.Since(start), finalErr)
+		}
 		writeSSE(w, map[string]any{"error": map[string]any{"message": finalErr.Error(), "type": "api_error"}})
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		flushLingma(flusher)
 		return
 	}
 	if result == nil {
+		if h.logger != nil {
+			h.logger.WarnModule("OPENAI", "Lingma调用失败 %s mode=stream model=%s duration=%s err=%s", accountLogPrefix("lingma"), request.Model, time.Since(start), "empty_final_result")
+		}
 		writeSSE(w, map[string]any{"error": map[string]any{"message": "Lingma stream finished without a final result", "type": "api_error"}})
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		flushLingma(flusher)
@@ -442,6 +466,13 @@ func (h *Handler) handleLingmaStream(w http.ResponseWriter, r *http.Request, req
 	)
 	if h.metrics != nil {
 		h.metrics.RecordModelUsage(model, promptTokens, completionTokens, totalTokens)
+	}
+	if h.logger != nil {
+		label := strings.TrimSpace(result.CredentialSrc)
+		if label == "" {
+			label = "lingma"
+		}
+		h.logger.InfoModule("OPENAI", "Lingma调用完成 %s mode=stream model=%s request_id=%s finish_reason=%s duration=%s", accountLogPrefix(label), request.Model, result.RequestID, finishReason, time.Since(start))
 	}
 	_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	flushLingma(flusher)

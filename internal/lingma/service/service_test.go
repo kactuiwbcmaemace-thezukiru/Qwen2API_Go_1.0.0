@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,25 +9,6 @@ import (
 	"qwen2api/internal/lingma/toolemulation"
 	"qwen2api/internal/prompts"
 )
-
-func TestIsRecoverableIPCError(t *testing.T) {
-	cases := []error{
-		errors.New("write websocket frame: write tcp 127.0.0.1:64954->127.0.0.1:36510: use of closed network connection"),
-		errors.New("broken pipe"),
-		errors.New("Lingma IPC notification stream closed"),
-	}
-	for _, err := range cases {
-		if !isRecoverableIPCError(err) {
-			t.Fatalf("expected recoverable error: %v", err)
-		}
-	}
-}
-
-func TestIsRecoverableIPCErrorIgnoresModelErrors(t *testing.T) {
-	if isRecoverableIPCError(errors.New("timed out while waiting for Lingma IPC to finish responding")) {
-		t.Fatal("timeout should not be treated as an immediate reconnect retry")
-	}
-}
 
 func TestNewKeepsZeroTimeoutUnlimited(t *testing.T) {
 	svc := New(Config{Timeout: 0})
@@ -53,17 +33,6 @@ func TestContextWithOptionalTimeoutPositiveSetsDeadline(t *testing.T) {
 	}
 }
 
-func TestDescribeIPCSetupErrorClarifiesClosedLingmaBackend(t *testing.T) {
-	err := describeIPCSetupError("session setup", context.DeadlineExceeded)
-	if err == nil {
-		t.Fatal("expected wrapped error")
-	}
-	text := err.Error()
-	if !strings.Contains(text, "session setup timed out") || !strings.Contains(text, "重新打开 Lingma") {
-		t.Fatalf("unexpected error text: %s", text)
-	}
-}
-
 func TestBuildLingmaPromptOnlyInjectsToolingWhenEmulationEnabled(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{{Role: "user", Text: "查看项目结构"}},
@@ -79,7 +48,7 @@ func TestBuildLingmaPromptOnlyInjectsToolingWhenEmulationEnabled(t *testing.T) {
 		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
 	}
 
-	remotePrompt, err := buildLingmaPrompt(req, SessionModeFresh, false)
+	remotePrompt, err := buildLingmaPrompt(req, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,12 +56,12 @@ func TestBuildLingmaPromptOnlyInjectsToolingWhenEmulationEnabled(t *testing.T) {
 		t.Fatalf("remote prompt should not include tool emulation:\n%s", remotePrompt)
 	}
 
-	ipcPrompt, err := buildLingmaPrompt(req, SessionModeFresh, true)
+	emulatedPrompt, err := buildLingmaPrompt(req, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(ipcPrompt, "```json action") || !strings.Contains(ipcPrompt, "DIRECT tool access") {
-		t.Fatalf("ipc prompt should include tool emulation:\n%s", ipcPrompt)
+	if !strings.Contains(emulatedPrompt, "```json action") || !strings.Contains(emulatedPrompt, "DIRECT tool access") {
+		t.Fatalf("emulated prompt should include tool instructions:\n%s", emulatedPrompt)
 	}
 }
 
@@ -114,7 +83,7 @@ func TestBuildLingmaPromptUsesPromptOverrides(t *testing.T) {
 		},
 	}
 
-	prompt, err := buildLingmaPrompt(req, SessionModeFresh, true)
+	prompt, err := buildLingmaPrompt(req, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +111,7 @@ func TestShouldRetryRemoteNativeToolForContinuationText(t *testing.T) {
 	}
 }
 
-func TestBuildLingmaPromptKeepsToolResultsForIPC(t *testing.T) {
+func TestBuildLingmaPromptKeepsToolResultsForEmulation(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{
 			{Role: "user", Text: "查看项目"},
@@ -152,15 +121,15 @@ func TestBuildLingmaPromptKeepsToolResultsForIPC(t *testing.T) {
 		Tools:      []toolemulation.ToolDef{{Name: "Bash"}},
 		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
 	}
-	prompt, err := buildLingmaPrompt(req, SessionModeFresh, true)
+	prompt, err := buildLingmaPrompt(req, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(prompt, "Tool result for call_1") || !strings.Contains(prompt, "/tmp/project") {
-		t.Fatalf("ipc prompt should include tool result:\n%s", prompt)
+		t.Fatalf("emulated prompt should include tool result:\n%s", prompt)
 	}
 	if strings.Contains(prompt, "Assistant used tool") {
-		t.Fatalf("ipc prompt should not include textualized assistant tool calls:\n%s", prompt)
+		t.Fatalf("emulated prompt should not include textualized assistant tool calls:\n%s", prompt)
 	}
 }
 
@@ -175,111 +144,17 @@ func TestRemoteImagesFromRequest(t *testing.T) {
 	}
 }
 
-func TestRequestHasImages(t *testing.T) {
-	if requestHasImages(ChatRequest{Messages: []ChatMessage{{Role: "user", Text: "plain"}}}) {
-		t.Fatal("plain request should not have images")
-	}
-	if !requestHasImages(ChatRequest{Messages: []ChatMessage{{Role: "user", Images: []Image{{URL: "file:///tmp/a.png"}}}}}) {
-		t.Fatal("image URL request should have images")
-	}
-}
-
-func TestRequestForImageContextUsesLatestImageTurnOnly(t *testing.T) {
-	req := ChatRequest{
-		System: "old system",
-		Messages: []ChatMessage{
-			{Role: "user", Text: "旧问题"},
-			{Role: "assistant", Text: "旧回答"},
-			{Role: "user", Text: "[Image #1] 这个图片是什么?", Images: []Image{{MediaType: "image/png", Data: "AAAA"}}},
-		},
-		Tools: []toolemulation.ToolDef{{
-			Name: "Bash",
-			InputSchema: map[string]any{
-				"required": []any{"command"},
-			},
-		}},
-		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
-	}
-
-	out := requestForImageContext(req)
-	if out.System != "" {
-		t.Fatalf("system = %q, want empty", out.System)
-	}
-	if len(out.Tools) != 0 || out.ToolChoice.Mode != "none" {
-		t.Fatalf("tools should be disabled: tools=%#v choice=%#v", out.Tools, out.ToolChoice)
-	}
-	if len(out.Messages) != 1 {
-		t.Fatalf("messages = %#v, want one compact image turn", out.Messages)
-	}
-	message := out.Messages[0]
-	if message.Role != "user" || len(message.Images) != 1 || message.Images[0].Data != "AAAA" {
-		t.Fatalf("unexpected image message = %#v", message)
-	}
-	if strings.Contains(message.Text, "旧问题") || !strings.Contains(message.Text, "忽略更早的对话历史") {
-		t.Fatalf("unexpected compact prompt = %q", message.Text)
-	}
-}
-
-func TestRequestForImageContextUsesShortSystemPromptForImageOnlyUser(t *testing.T) {
-	req := ChatRequest{
-		System:   "这张图片是什么？只用两句话回答。",
-		Messages: []ChatMessage{{Role: "user", Images: []Image{{MediaType: "image/jpeg", Data: "AAAA"}}}},
-	}
-
-	out := requestForImageContext(req)
-	if len(out.Messages) != 1 {
-		t.Fatalf("messages = %#v, want one compact image turn", out.Messages)
-	}
-	message := out.Messages[0]
-	if message.Role != "user" || len(message.Images) != 1 {
-		t.Fatalf("unexpected image message = %#v", message)
-	}
-	if !strings.Contains(message.Text, "这张图片是什么") {
-		t.Fatalf("compact prompt should include short system prompt, got %q", message.Text)
-	}
-}
-
 func TestBuildLingmaPromptUsesImageFallbackForImageOnlyUser(t *testing.T) {
 	req := ChatRequest{
 		System:   "这张图片是什么？只用两句话回答。",
 		Messages: []ChatMessage{{Role: "user", Images: []Image{{URL: "file:///tmp/a.jpg"}}}},
 	}
 
-	prompt, err := buildLingmaPrompt(req, SessionModeFresh, false)
+	prompt, err := buildLingmaPrompt(req, false)
 	if err != nil {
 		t.Fatalf("buildLingmaPrompt returned error: %v", err)
 	}
 	if !strings.Contains(prompt, "这张图片是什么") {
 		t.Fatalf("prompt should include image fallback question, got %q", prompt)
-	}
-}
-
-func TestExtractLastUserImagesFindsPreviousImageTurn(t *testing.T) {
-	images := extractLastUserImages([]ChatMessage{
-		{Role: "user", Text: "看这张图", Images: []Image{{URL: "file:///tmp/a.png"}}},
-		{Role: "assistant", Text: "这是一张图片"},
-		{Role: "user", Text: "继续基于上图分析"},
-	})
-	if len(images) != 1 || images[0].URL != "file:///tmp/a.png" {
-		t.Fatalf("images = %#v", images)
-	}
-}
-
-func TestRequestWithImageContextRemovesImagesAndAppendsContext(t *testing.T) {
-	req := ChatRequest{
-		Messages: []ChatMessage{
-			{Role: "user", Text: "看图", Images: []Image{{URL: "file:///tmp/a.png"}}},
-			{Role: "assistant", Text: "好的"},
-			{Role: "user", Text: "继续分析"},
-		},
-	}
-	out := requestWithImageContext(req, "海边礁石和海浪")
-	for _, message := range out.Messages {
-		if len(message.Images) > 0 {
-			t.Fatalf("images should be removed: %#v", out.Messages)
-		}
-	}
-	if !strings.Contains(out.Messages[2].Text, "[图片上下文]") || !strings.Contains(out.Messages[2].Text, "海边礁石和海浪") {
-		t.Fatalf("latest user message missing image context: %#v", out.Messages[2])
 	}
 }

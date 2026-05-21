@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,30 +17,42 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"qwen2api/internal/lingma/toolemulation"
 )
 
 const (
-	DefaultBaseURL = "https://lingma.alibabacloud.com"
-	chatPath       = "/algo/api/v2/service/pro/sse/agent_chat_generation"
-	chatQuery      = "?FetchKeys=llm_model_result&AgentId=agent_common"
-	modelListPath  = "/algo/api/v2/model/list"
+	DefaultBaseURL   = "https://lingma-api.tongyi.aliyun.com/algo"
+	DefaultService   = "agent_chat_generation"
+	DefaultFetchKeys = "llm_model_result"
+	DefaultAgentID   = "agent_common"
+	DefaultChatTask  = "question_refine"
+	chatPath         = "/api/v2/service/pro/sse/"
+	chatQuery        = "?FetchKeys="
+	modelListPath    = "/api/v2/model/list"
 )
 
 var remoteBaseURLPattern = regexp.MustCompile(`https?://[^\s"'<>),\]}]+`)
 
 type Config struct {
-	BaseURL     string
-	AuthFile    string
-	CosyVersion string
-	Timeout     time.Duration
+	BaseURL            string
+	AuthFile           string
+	CosyVersion        string
+	Service            string
+	FetchKeys          string
+	ChatTask           string
+	Timeout            time.Duration
+	CredentialProvider CredentialProvider
 }
 
 type Client struct {
-	cfg    Config
-	client *http.Client
+	cfg         Config
+	client      *http.Client
+	baseURLs    []string
+	nextBaseURL atomic.Uint64
+	nextCred    atomic.Uint64
 }
 
 type BaseURLHint struct {
@@ -94,18 +107,49 @@ type StreamEvent struct {
 }
 
 func New(cfg Config) *Client {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = ResolveBaseURL("")
-	}
 	if cfg.CosyVersion == "" {
 		cfg.CosyVersion = "2.11.2"
 	}
-	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
-	return &Client{cfg: cfg, client: &http.Client{Timeout: cfg.Timeout}}
+	if cfg.Service == "" {
+		cfg.Service = DefaultService
+	}
+	cfg.Service = strings.Trim(strings.TrimSpace(cfg.Service), "/")
+	cfg.FetchKeys = strings.TrimSpace(cfg.FetchKeys)
+	if cfg.FetchKeys == "" && strings.EqualFold(cfg.Service, DefaultService) {
+		cfg.FetchKeys = DefaultFetchKeys
+	}
+	cfg.ChatTask = strings.TrimSpace(cfg.ChatTask)
+	if cfg.ChatTask == "" {
+		cfg.ChatTask = DefaultChatTask
+	}
+	baseURLs := ResolveBaseURLs(cfg.BaseURL)
+	if len(baseURLs) > 0 {
+		cfg.BaseURL = baseURLs[0]
+	}
+	return &Client{cfg: cfg, client: &http.Client{Timeout: cfg.Timeout}, baseURLs: baseURLs}
 }
 
 func ResolveBaseURL(explicit string) string {
-	return ResolveBaseURLWithSource(explicit).URL
+	baseURLs := ResolveBaseURLs(explicit)
+	if len(baseURLs) == 0 {
+		return normalizeRemoteEndpoint(DefaultBaseURL)
+	}
+	return baseURLs[0]
+}
+
+func ResolveBaseURLs(explicit string) []string {
+	hint := ResolveBaseURLWithSource(explicit)
+	values := parseCSV(hint.URL)
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if base := normalizeRemoteEndpoint(value); base != "" {
+			out = append(out, base)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, normalizeRemoteEndpoint(DefaultBaseURL))
+	}
+	return uniqueStrings(out)
 }
 
 func ResolveBaseURLWithSource(explicit string) BaseURLHint {
@@ -124,7 +168,7 @@ func ResolveBaseURLWithSource(explicit string) BaseURLHint {
 }
 
 func (c *Client) Warmup(ctx context.Context) error {
-	_, err := LoadCredential(c.cfg.AuthFile)
+	_, err := c.loadCredentials(ctx)
 	if err != nil {
 		return err
 	}
@@ -135,7 +179,7 @@ func (c *Client) Warmup(ctx context.Context) error {
 }
 
 func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
-	cred, err := LoadCredential(c.cfg.AuthFile)
+	cred, err := c.nextCredential(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -143,42 +187,51 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.BaseURL+modelListPath, nil)
-	if err != nil {
-		return nil, err
+	var lastErr error
+	for _, baseURL := range c.orderedBaseURLs() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+modelListPath, nil)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			lastErr = c.modelListStatusError(baseURL, resp.StatusCode, string(body))
+			continue
+		}
+		var payload struct {
+			Chat   []Model `json:"chat"`
+			Inline []Model `json:"inline"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return nil, err
+		}
+		return append(payload.Chat, payload.Inline...), nil
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
+	if lastErr != nil {
+		return nil, lastErr
 	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return nil, c.modelListStatusError(resp.StatusCode, string(body))
-	}
-	var payload struct {
-		Chat   []Model `json:"chat"`
-		Inline []Model `json:"inline"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
-	}
-	return append(payload.Chat, payload.Inline...), nil
+	return nil, fmt.Errorf("no Lingma remote endpoint configured")
 }
 
-func (c *Client) modelListStatusError(statusCode int, body string) error {
-	message := fmt.Sprintf("remote model list status %d from %s: %s", statusCode, c.cfg.BaseURL, truncate(body, 500))
+func (c *Client) modelListStatusError(baseURL string, statusCode int, body string) error {
+	message := fmt.Sprintf("remote model list status %d from %s: %s", statusCode, baseURL, truncate(body, 500))
 	if statusCode == http.StatusNotFound || strings.Contains(body, "NoSuchKey") {
-		message += "。这通常表示远端 API 域名自动探测命中了错误地址，请到设置页手动填写 Lingma 官方或企业专属远端 API 域名；官方默认域名为 https://lingma.alibabacloud.com。"
+		message += "。这通常表示远端 API 域名自动探测命中了错误地址，请到设置页手动填写 Lingma 远端 API 域名；官方默认协议端点为 https://lingma-api.tongyi.aliyun.com/algo。"
 	}
 	return fmt.Errorf("%s", message)
 }
 
 func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(string)) (*ChatResult, error) {
-	cred, err := LoadCredential(c.cfg.AuthFile)
+	cred, err := c.nextCredential(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -187,25 +240,47 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(str
 	if err != nil {
 		return nil, err
 	}
-	headers, err := c.headers(cred, chatPath, body)
+	path := c.chatRequestPath()
+	signPath := strings.SplitN(path, "?", 2)[0]
+	headers, err := c.headers(cred, signPath, body)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+chatPath+chatQuery, strings.NewReader(body))
-	if err != nil {
-		return nil, err
+	var resp *http.Response
+	var lastErr error
+	var endpoint string
+	for _, baseURL := range c.orderedBaseURLs() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, strings.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err = c.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		endpoint = baseURL
+		if resp.StatusCode < 500 {
+			break
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		lastErr = fmt.Errorf("remote chat status %d from %s: %s", resp.StatusCode, baseURL, truncate(string(respBody), 1000))
+		resp = nil
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
+	if resp == nil {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("no Lingma remote endpoint configured")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("remote chat status %d: %s", resp.StatusCode, truncate(string(respBody), 1000))
+		return nil, fmt.Errorf("remote chat status %d from %s: %s", resp.StatusCode, endpoint, truncate(string(respBody), 1000))
 	}
 	var builder strings.Builder
 	toolCallBuffer := newRemoteToolCallBuffer()
@@ -239,6 +314,44 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(str
 }
 
 func (c *Client) buildBody(requestID string, request ChatRequest) (string, error) {
+	if strings.EqualFold(c.cfg.Service, DefaultService) {
+		return c.buildAgentChatBody(requestID, request)
+	}
+	return c.buildChatAskBody(requestID, request)
+}
+
+func (c *Client) buildChatAskBody(requestID string, request ChatRequest) (string, error) {
+	model := strings.TrimSpace(request.Model)
+	sessionID := "openai-compat"
+	question := latestQuestion(request)
+	payload := map[string]any{
+		"requestId":     requestID,
+		"request_id":    requestID,
+		"sessionId":     sessionID,
+		"session_id":    sessionID,
+		"chatTask":      c.cfg.ChatTask,
+		"chat_task":     c.cfg.ChatTask,
+		"questionText":  question,
+		"question_text": question,
+		"messages":      projectMessages(request),
+		"chatMessages":  projectMessages(request),
+		"stream":        true,
+		"model":         model,
+	}
+	if request.Temperature != nil {
+		payload["temperature"] = *request.Temperature
+	}
+	if tools := projectTools(request.Tools); len(tools) > 0 {
+		payload["tools"] = tools
+	}
+	if choice := projectToolChoice(request.ToolChoice); choice != nil {
+		payload["tool_choice"] = choice
+	}
+	body, err := json.Marshal(payload)
+	return string(body), err
+}
+
+func (c *Client) buildAgentChatBody(requestID string, request ChatRequest) (string, error) {
 	temperature := 0.1
 	if request.Temperature != nil {
 		temperature = *request.Temperature
@@ -263,8 +376,8 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 		"chat_prompt":      "",
 		"parameters":       map[string]float64{"temperature": temperature},
 		"aliyun_user_type": "personal_standard",
-		"agent_id":         "agent_common",
-		"task_id":          "question_refine",
+		"agent_id":         DefaultAgentID,
+		"task_id":          c.cfg.ChatTask,
 		"model_config": map[string]any{
 			"key":          model,
 			"display_name": "",
@@ -277,7 +390,7 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 			"source":       "",
 			"enable":       false,
 		},
-		"messages": projectMessages(request),
+		"messages": projectAgentMessages(request),
 		"business": map[string]any{
 			"product":  "jb_plugin",
 			"version":  c.cfg.CosyVersion,
@@ -296,6 +409,54 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 	}
 	body, err := json.Marshal(payload)
 	return string(body), err
+}
+
+func (c *Client) chatRequestPath() string {
+	fetchKeys := strings.TrimSpace(c.cfg.FetchKeys)
+	path := chatPath + c.cfg.Service + chatQuery + url.QueryEscape(fetchKeys)
+	if strings.EqualFold(c.cfg.Service, DefaultService) {
+		path += "&AgentId=" + url.QueryEscape(DefaultAgentID)
+	}
+	return path
+}
+
+func (c *Client) orderedBaseURLs() []string {
+	if len(c.baseURLs) == 0 {
+		return []string{normalizeRemoteEndpoint(DefaultBaseURL)}
+	}
+	start := int(c.nextBaseURL.Add(1)-1) % len(c.baseURLs)
+	out := make([]string, 0, len(c.baseURLs))
+	out = append(out, c.baseURLs[start:]...)
+	out = append(out, c.baseURLs[:start]...)
+	return out
+}
+
+func (c *Client) nextCredential(ctx context.Context) (Credential, error) {
+	creds, err := c.loadCredentials(ctx)
+	if err != nil {
+		return Credential{}, err
+	}
+	if len(creds) == 0 {
+		return Credential{}, errors.New("no Lingma remote credential was loaded")
+	}
+	idx := int(c.nextCred.Add(1)-1) % len(creds)
+	return creds[idx], nil
+}
+
+func (c *Client) loadCredentials(ctx context.Context) ([]Credential, error) {
+	if c.cfg.CredentialProvider != nil {
+		return c.cfg.CredentialProvider(ctx)
+	}
+	return LoadCredentials(c.cfg.AuthFile)
+}
+
+func latestQuestion(request ChatRequest) string {
+	for i := len(request.Messages) - 1; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(request.Messages[i].Role), "user") && strings.TrimSpace(request.Messages[i].Content) != "" {
+			return strings.TrimSpace(request.Messages[i].Content)
+		}
+	}
+	return strings.TrimSpace(request.Prompt)
 }
 
 func nullableSlice[T any](items []T) any {
@@ -333,6 +494,22 @@ func projectImage(img Image) string {
 	return strings.TrimSpace(img.URL)
 }
 
+func projectAgentMessages(request ChatRequest) []map[string]any {
+	messages := projectMessages(request)
+	for _, item := range messages {
+		item["response_meta"] = map[string]any{
+			"id": "",
+			"usage": map[string]int{
+				"prompt_tokens":     0,
+				"completion_tokens": 0,
+				"total_tokens":      0,
+			},
+		}
+		item["reasoning_content_signature"] = ""
+	}
+	return messages
+}
+
 func projectMessages(request ChatRequest) []map[string]any {
 	source := request.Messages
 	if len(source) == 0 {
@@ -347,15 +524,6 @@ func projectMessages(request ChatRequest) []map[string]any {
 		item := map[string]any{
 			"role":    role,
 			"content": projectMessageContent(message),
-			"response_meta": map[string]any{
-				"id": "",
-				"usage": map[string]int{
-					"prompt_tokens":     0,
-					"completion_tokens": 0,
-					"total_tokens":      0,
-				},
-			},
-			"reasoning_content_signature": "",
 		}
 		if message.Name != "" {
 			item["name"] = message.Name
@@ -482,7 +650,6 @@ func (c *Client) headers(cred Credential, path string, body string) (map[string]
 	date := strconv.FormatInt(time.Now().Unix(), 10)
 	authPayload := map[string]string{
 		"cosyVersion": c.cfg.CosyVersion,
-		"ideVersion":  "",
 		"info":        cred.EncryptUserInfo,
 		"requestId":   newUUID(),
 		"version":     "v1",
@@ -501,33 +668,36 @@ func (c *Client) headers(cred Credential, path string, body string) (map[string]
 	}, "\n")
 	signature := md5.Sum([]byte(preimage))
 	return map[string]string{
-		"Authorization":     fmt.Sprintf("Bearer COSY.%s.%x", payloadBase64, signature),
-		"Content-Type":      "application/json",
-		"Appcode":           "cosy",
-		"Cosy-Date":         date,
-		"Cosy-Key":          cred.CosyKey,
-		"Cosy-Machineid":    cred.MachineID,
-		"Cosy-User":         cred.UserID,
-		"Cosy-Clientip":     "198.18.0.1",
-		"Cosy-Clienttype":   "2",
-		"Cosy-Machineos":    MachineOSHeader(),
-		"Cosy-Machinetoken": "",
-		"Cosy-Machinetype":  "",
-		"Cosy-Version":      c.cfg.CosyVersion,
-		"Login-Version":     "v2",
-		"User-Agent":        "lingma-proxy/remote",
-		"Accept":            "text/event-stream",
-		"Cache-Control":     "no-cache",
+		"Authorization":   fmt.Sprintf("Bearer COSY.%s.%x", payloadBase64, signature),
+		"Content-Type":    "application/json",
+		"Accept":          "text/event-stream",
+		"Accept-Encoding": "identity",
+		"Cache-Control":   "no-cache",
+		"Connection":      "keep-alive",
+		"X-Request-ID":    authPayload["requestId"],
+		"Cosy-Date":       date,
+		"Cosy-Key":        cred.CosyKey,
+		"Cosy-User":       cred.UserID,
+		"Cosy-ClientIp":   "127.0.0.1",
+		"Cosy-MachineId":  cred.MachineID,
+		"Cosy-ClientType": "0",
+		"Cosy-Version":    c.cfg.CosyVersion,
+		"Login-Version":   "v2",
+		"Cosy-isVscode":   "1",
+		"User-Agent":      "qwen2api-lingma/remote",
 	}, nil
 }
 
 func normalizePath(path string) string {
+	if parsed, err := url.Parse(path); err == nil && parsed.Path != "" {
+		path = parsed.Path
+	}
 	return strings.TrimPrefix(path, "/algo")
 }
 
 type outerSSE struct {
 	Body       string `json:"body"`
-	StatusCode int    `json:"statusCodeValue"`
+	StatusCode *int   `json:"statusCodeValue"`
 }
 
 type innerSSE struct {
@@ -594,17 +764,26 @@ func parseSSEPayload(payload string) (sseEvent, bool, error) {
 	if err := json.Unmarshal([]byte(payload), &outer); err != nil {
 		return sseEvent{}, false, err
 	}
-	if outer.StatusCode >= 400 {
-		return sseEvent{}, false, fmt.Errorf("remote sse status %d", outer.StatusCode)
+	if outer.StatusCode != nil && *outer.StatusCode >= 400 {
+		message := strings.TrimSpace(outer.Body)
+		if message == "" {
+			message = strings.TrimSpace(payload)
+		}
+		return sseEvent{}, false, fmt.Errorf("remote sse status %d: %s", *outer.StatusCode, truncate(message, 1000))
 	}
-	if outer.Body == "" {
+	if outer.StatusCode != nil && outer.Body == "" {
 		return sseEvent{}, false, nil
 	}
-	if outer.Body == "[DONE]" {
+
+	body := strings.TrimSpace(outer.Body)
+	if body == "" {
+		body = payload
+	}
+	if body == "[DONE]" {
 		return sseEvent{Done: true}, true, nil
 	}
 	var inner innerSSE
-	if err := json.Unmarshal([]byte(outer.Body), &inner); err != nil {
+	if err := json.Unmarshal([]byte(body), &inner); err != nil {
 		return sseEvent{}, false, err
 	}
 	var builder strings.Builder
@@ -846,6 +1025,52 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func parseCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func normalizeRemoteEndpoint(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "ttps://") {
+		raw = "h" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ""
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	path := strings.TrimRight(parsed.EscapedPath(), "/")
+	switch {
+	case path == "":
+		parsed.Path = "/algo"
+	case strings.HasSuffix(path, "/algo"):
+		parsed.Path = path
+	case strings.Contains(path, "/algo/"):
+		parsed.Path = path[:strings.Index(path, "/algo/")+len("/algo")]
+	default:
+		parsed.Path = path + "/algo"
+	}
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 func extractBaseURLFromText(text string) string {

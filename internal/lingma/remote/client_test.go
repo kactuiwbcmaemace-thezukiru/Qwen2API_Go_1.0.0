@@ -80,7 +80,7 @@ func TestNormalizeBaseURLRejectsUnsupportedScheme(t *testing.T) {
 
 func TestModelListStatusErrorSuggestsManualRemoteBaseURLOn404(t *testing.T) {
 	client := New(Config{BaseURL: "https://lingma-ide.oss-rg-china-mainland.aliyuncs.com"})
-	err := client.modelListStatusError(404, `<Error><Code>NoSuchKey</Code></Error>`)
+	err := client.modelListStatusError("https://lingma-ide.oss-rg-china-mainland.aliyuncs.com/algo", 404, `<Error><Code>NoSuchKey</Code></Error>`)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -88,7 +88,7 @@ func TestModelListStatusErrorSuggestsManualRemoteBaseURLOn404(t *testing.T) {
 	for _, want := range []string{
 		"https://lingma-ide.oss-rg-china-mainland.aliyuncs.com",
 		"远端 API 域名自动探测命中了错误地址",
-		"https://lingma.alibabacloud.com",
+		"https://lingma-api.tongyi.aliyun.com/algo",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("error %q missing %q", text, want)
@@ -96,8 +96,51 @@ func TestModelListStatusErrorSuggestsManualRemoteBaseURLOn404(t *testing.T) {
 	}
 }
 
-func TestBuildBodyProjectsNativeTools(t *testing.T) {
+func TestResolveBaseURLsNormalizesProtocolEndpoint(t *testing.T) {
+	got := ResolveBaseURLs("https://example.test,https://example2.test/custom/algo/api/v2/model/list")
+	want := []string{"https://example.test/algo", "https://example2.test/custom/algo"}
+	if len(got) != len(want) {
+		t.Fatalf("base URLs = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("base URL %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestChatRequestPathDefaultsToAgentChatGeneration(t *testing.T) {
 	client := New(Config{})
+	got := client.chatRequestPath()
+	want := "/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common"
+	if got != want {
+		t.Fatalf("chat path = %q, want %q", got, want)
+	}
+}
+
+func TestBuildBodyDefaultsToAgentChatGenerationSchema(t *testing.T) {
+	client := New(Config{})
+	body, err := client.buildBody("req-1", ChatRequest{
+		Model:  "kmodel",
+		Prompt: "read file",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["task_id"] != "question_refine" || payload["agent_id"] != "agent_common" {
+		t.Fatalf("agent chat fields missing: %#v", payload)
+	}
+	if _, ok := payload["chatTask"]; ok {
+		t.Fatalf("agent chat payload should not include chatTask: %#v", payload)
+	}
+}
+
+func TestBuildBodyProjectsNativeTools(t *testing.T) {
+	client := New(Config{Service: "chat_ask", ChatTask: "question_refine"})
 	body, err := client.buildBody("req-1", ChatRequest{
 		Model:  "kmodel",
 		Prompt: "read file",
@@ -134,6 +177,20 @@ func TestBuildBodyProjectsNativeTools(t *testing.T) {
 	choiceFn := choice["function"].(map[string]any)
 	if choice["type"] != "function" || choiceFn["name"] != "read_file" {
 		t.Fatalf("unexpected tool choice: %#v", payload["tool_choice"])
+	}
+	if payload["requestId"] != "req-1" || payload["questionText"] != "read file" {
+		t.Fatalf("pure protocol fields missing: %#v", payload)
+	}
+	if payload["stream"] != true {
+		t.Fatalf("sse chat_ask payload stream = %#v, want true", payload["stream"])
+	}
+	if payload["chatTask"] != "question_refine" || payload["chat_task"] != "question_refine" {
+		t.Fatalf("chat_ask task = %#v/%#v, want question_refine", payload["chatTask"], payload["chat_task"])
+	}
+	for _, legacy := range []string{"request_set_id", "chat_record_id", "image_urls", "model_config", "business", "agent_id", "task_id"} {
+		if _, ok := payload[legacy]; ok {
+			t.Fatalf("chat_ask payload should not include legacy %q: %#v", legacy, payload)
+		}
 	}
 }
 
@@ -202,23 +259,15 @@ func TestBuildBodyProjectsRemoteImages(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		t.Fatal(err)
 	}
-	images, ok := payload["image_urls"].([]any)
-	if !ok || len(images) != 1 {
-		t.Fatalf("image_urls = %#v", payload["image_urls"])
-	}
-	image, ok := images[0].(string)
-	if !ok || !strings.HasPrefix(image, "data:image/png;base64,") {
-		t.Fatalf("unexpected image projection: %#v", images[0])
-	}
-	modelConfig := payload["model_config"].(map[string]any)
-	if modelConfig["is_vl"] != true {
-		t.Fatalf("model_config.is_vl = %#v, want true", modelConfig["is_vl"])
-	}
 	messages := payload["messages"].([]any)
 	message := messages[0].(map[string]any)
 	content := message["content"].([]any)
 	if content[0].(map[string]any)["type"] != "text" || content[1].(map[string]any)["type"] != "image_url" {
 		t.Fatalf("unexpected message content: %#v", content)
+	}
+	imageURL := content[1].(map[string]any)["image_url"].(map[string]any)
+	if !strings.HasPrefix(imageURL["url"].(string), "data:image/png;base64,") {
+		t.Fatalf("unexpected image url: %#v", imageURL)
 	}
 }
 
@@ -237,6 +286,28 @@ func TestParseSSEPayloadExtractsNativeToolCallFragments(t *testing.T) {
 	call := event.ToolCalls[0]
 	if call.ID != "call_1" || call.Name != "read_file" || call.ArgumentsFragment != `{"file_path":"/tmp/a.txt"}` {
 		t.Fatalf("unexpected call = %#v", call)
+	}
+}
+
+func TestParseSSEPayloadIncludesBodyOnStatusError(t *testing.T) {
+	payload := `{"body":"{\"message\":\"invalid request body\"}","statusCodeValue":400}`
+	_, _, err := parseSSEPayload(payload)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "remote sse status 400") || !strings.Contains(err.Error(), "invalid request body") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseSSEPayloadAcceptsRawOpenAIChunk(t *testing.T) {
+	payload := `{"choices":[{"delta":{"content":"hello"}}]}`
+	event, ok, err := parseSSEPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || event.Content != "hello" {
+		t.Fatalf("event = %#v ok=%v", event, ok)
 	}
 }
 
@@ -304,5 +375,44 @@ func TestLoadMachineIDReadsVSCodeSharedClientCacheID(t *testing.T) {
 	}
 	if got != "abcdefghijklmnop1234" {
 		t.Fatalf("machine id = %q", got)
+	}
+}
+
+func TestLoadCredentialsReadsAccountBundle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lingma-accounts.json")
+	body := `{
+		"accounts":[{
+			"source":"first",
+			"token_expire_time":"4102444800000",
+			"auth":{"cosy_key":"key-1","encrypt_user_info":"info-1","user_id":"user-1","machine_id":"machine-1"}
+		},{
+			"source":"second",
+			"auth":{"cosy_key":"key-2","encrypt_user_info":"info-2","user_id":"user-2","machine_id":"machine-2"}
+		}]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	creds, err := LoadCredentials(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(creds) != 2 || creds[0].UserID != "user-1" || creds[1].CosyKey != "key-2" {
+		t.Fatalf("credentials = %#v", creds)
+	}
+}
+
+func TestLoadCredentialsReadsEnvLists(t *testing.T) {
+	t.Setenv("LINGMA_COSY_USER", "user-1,user-2")
+	t.Setenv("LINGMA_COSY_KEY", "key-1,key-2")
+	t.Setenv("LINGMA_AUTH_INFO", "info-1,info-2")
+	t.Setenv("LINGMA_MACHINE_ID", "machine-1,machine-2")
+
+	creds, err := LoadCredentials("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(creds) != 2 || creds[0].MachineID != "machine-1" || creds[1].EncryptUserInfo != "info-2" {
+		t.Fatalf("credentials = %#v", creds)
 	}
 }

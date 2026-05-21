@@ -14,7 +14,7 @@ import (
 	"qwen2api/internal/auth"
 	"qwen2api/internal/cleanup"
 	"qwen2api/internal/config"
-	"qwen2api/internal/lingma/lingmaipc"
+	lingmaremote "qwen2api/internal/lingma/remote"
 	lingmaservice "qwen2api/internal/lingma/service"
 	"qwen2api/internal/logging"
 	"qwen2api/internal/metrics"
@@ -52,8 +52,8 @@ func main() {
 	runtime := config.NewRuntime(cfg)
 	stats := metrics.NewDashboardStats()
 	qwenClient := qwen.NewClient(cfg, logger)
-	lingmaService := newLingmaService(cfg)
 	accountService := account.NewService(cfg, runtime, store, qwenClient, logger)
+	lingmaService := newLingmaService(cfg)
 	conversationSessions := openai.NewConversationSessionService(conversationStore, logger)
 	chatTracker, err := storage.NewChatTracker(cfg.RedisURL)
 	if err != nil {
@@ -108,33 +108,22 @@ func main() {
 }
 
 func newLingmaService(cfg config.Config) *lingmaservice.Service {
-	transport, err := lingmaipc.ParseTransport(cfg.LingmaTransport)
-	if err != nil {
-		transport = lingmaipc.TransportAuto
-	}
-
-	backend := lingmaservice.BackendMode(cfg.LingmaBackend)
-	if backend != lingmaservice.BackendRemote && backend != lingmaservice.BackendIPC {
-		backend = lingmaservice.BackendRemote
-	}
-
-	sessionMode := lingmaservice.SessionMode(cfg.LingmaSessionMode)
-	if sessionMode != lingmaservice.SessionModeFresh &&
-		sessionMode != lingmaservice.SessionModeReuse &&
-		sessionMode != lingmaservice.SessionModeAuto {
-		sessionMode = lingmaservice.SessionModeAuto
-	}
+	credentialProvider := lingmaremote.NewLoginCredentialProvider(lingmaremote.Config{
+		BaseURL:     cfg.LingmaRemoteBaseURL,
+		AuthFile:    cfg.LingmaRemoteAuthFile,
+		CosyVersion: cfg.LingmaRemoteVersion,
+		Timeout:     time.Duration(cfg.LingmaTimeoutSeconds) * time.Second,
+	})
 
 	return lingmaservice.New(lingmaservice.Config{
-		Backend:               backend,
-		Transport:             transport,
-		Pipe:                  cfg.LingmaPipe,
-		WebSocketURL:          cfg.LingmaWebSocketURL,
 		RemoteBaseURL:         cfg.LingmaRemoteBaseURL,
 		RemoteAuthFile:        cfg.LingmaRemoteAuthFile,
 		RemoteVersion:         cfg.LingmaRemoteVersion,
+		RemoteService:         cfg.LingmaRemoteService,
+		RemoteFetchKeys:       cfg.LingmaRemoteFetchKeys,
+		RemoteChatTask:        cfg.LingmaRemoteChatTask,
+		CredentialProvider:    credentialProvider,
 		Model:                 cfg.LingmaModel,
-		SessionMode:           sessionMode,
 		Timeout:               time.Duration(cfg.LingmaTimeoutSeconds) * time.Second,
 		RemoteFallbackEnabled: cfg.LingmaFallback,
 		RemoteFallbackModels:  cfg.LingmaFallbackModels,

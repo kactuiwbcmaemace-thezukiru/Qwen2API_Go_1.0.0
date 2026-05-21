@@ -1,20 +1,10 @@
 # Qwen2API_Go
 
-把 Qwen Chat 包装成 OpenAI / Anthropic 兼容接口，带管理后台、账号池、文件上传、图片/视频生成。
-
-适合：
-
-- 个人自用
-- 小规模内网转发
-- 给现有 OpenAI SDK / Anthropic SDK 直接接入
-
-不适合：
-
-- 公益池
-- 多人共享大并发
-- 对外售卖
+把 Qwen Chat / Lingma 包装成 OpenAI / Anthropic 兼容接口，带管理后台、账号池、文件上传、图片/视频生成。
 
 ## 使用前提醒
+
+> 为了防止NewAPI之类的反向代理进行批量测试导致单IP访问被封禁,已对请求为 hi 的内容实行固定返回,介意勿用
 
 ### 请尽量仅自用
 
@@ -258,7 +248,6 @@ go run ./cmd/qwen2api
 
 ## 项目参考
 
-- [Lingma Proxy](https://github.com/Lutiancheng1/lingma-proxy)
 - [Qwen2API](https://github.com/Rfym21/Qwen2API)
 
 感谢以上项目提供的参考

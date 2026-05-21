@@ -92,6 +92,13 @@ export type SettingsResponse = {
   qwenWeb2ControlPrompt: string;
 };
 
+export type LingmaLoginURLResponse = {
+  url: string;
+  state: string;
+  authFile: string;
+  opened?: boolean;
+};
+
 export type PromptItem = {
   id: string;
   category: string;

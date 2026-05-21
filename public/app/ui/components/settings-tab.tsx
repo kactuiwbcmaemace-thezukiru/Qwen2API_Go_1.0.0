@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { SettingsResponse } from "../types";
 import { Input, Switch } from "@heroui/react";
+import { LogIn } from "lucide-react";
 
 type SwitchValue = boolean | { target?: { checked?: boolean } };
 type BooleanSettingKey = "autoRefresh" | "outThink" | "simpleModelMap";
@@ -15,6 +16,7 @@ function selectedSwitchValue(value: SwitchValue) {
 export function SettingsTab({
   settings,
   savingSettings,
+  openingLingmaLogin,
   addKeyValue,
   thresholdHours,
   setAddKeyValue,
@@ -23,12 +25,14 @@ export function SettingsTab({
   addRegularKey,
   deleteRegularKey,
   refreshAllAccounts,
+  openLingmaLogin,
   reloadRuntimeConfig,
   saveSettings,
   saveChatCleanupMode,
 }: {
   settings: SettingsResponse | null;
   savingSettings: boolean;
+  openingLingmaLogin: boolean;
   addKeyValue: string;
   thresholdHours: string;
   setAddKeyValue: (value: string) => void;
@@ -37,6 +41,7 @@ export function SettingsTab({
   addRegularKey: () => Promise<void>;
   deleteRegularKey: (key: string) => Promise<void>;
   refreshAllAccounts: (force: boolean) => Promise<void>;
+  openLingmaLogin: () => Promise<void>;
   reloadRuntimeConfig: () => Promise<void>;
   saveSettings: (path: string, body: Record<string, unknown>, successMessage: string) => Promise<void>;
   saveChatCleanupMode: (mode: number) => Promise<void>;
@@ -342,6 +347,21 @@ export function SettingsTab({
               </div>
             </div>
             <div className="admin-card-body flex flex-col gap-5">
+              <div className="border-b border-[var(--border)] pb-4">
+                <h4 className="text-sm font-semibold mb-1">Lingma 授权</h4>
+                <p className="text-xs text-[var(--text-secondary)] mb-3">
+                  浏览器登录成功后会合并写入账号池，Lingma 模型会从账号池轮换取用
+                </p>
+                <button
+                  className="admin-btn admin-btn-primary"
+                  disabled={openingLingmaLogin}
+                  onClick={() => void openLingmaLogin()}
+                >
+                  <LogIn size={16} />
+                  {openingLingmaLogin ? "打开中..." : "打开 Lingma 登录"}
+                </button>
+              </div>
+
               <div className="admin-form-group">
                 <label>即将过期阈值（小时）</label>
                 <Input

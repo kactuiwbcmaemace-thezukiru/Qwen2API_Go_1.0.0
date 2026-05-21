@@ -124,7 +124,7 @@ var definitions = []Definition{
 		ID:          IDLingmaTooling,
 		Category:    "Lingma 工具",
 		Title:       "Lingma 工具模拟协议",
-		Description: "Lingma IPC 工具模拟使用的 action block 协议。",
+		Description: "Lingma 纯协议工具模拟使用的 action block 协议。",
 		DefaultValue: strings.Join([]string{
 			"You are an AI assistant with DIRECT tool access inside an IDE.",
 			"",

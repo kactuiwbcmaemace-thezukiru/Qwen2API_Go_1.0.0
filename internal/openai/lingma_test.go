@@ -162,7 +162,6 @@ func lingmaTestService(t *testing.T, baseURL string, model string) *lingmaservic
 		t.Fatal(err)
 	}
 	return lingmaservice.New(lingmaservice.Config{
-		Backend:        lingmaservice.BackendRemote,
 		RemoteBaseURL:  baseURL,
 		RemoteAuthFile: authFile,
 		Model:          model,

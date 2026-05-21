@@ -27,6 +27,7 @@ type Credential struct {
 }
 
 type storedCredentialFile struct {
+	Email           string `json:"email"`
 	Source          string `json:"source"`
 	TokenExpireTime string `json:"token_expire_time"`
 	Auth            struct {
@@ -35,33 +36,174 @@ type storedCredentialFile struct {
 		UserID          string `json:"user_id"`
 		MachineID       string `json:"machine_id"`
 	} `json:"auth"`
+	Lingma *storedCredentialFile `json:"lingma"`
 }
+
+type storedCredentialBundle struct {
+	Accounts []storedCredentialFile `json:"accounts"`
+}
+
+var errNoExplicitCredential = errors.New("Lingma explicit COSY credential is not configured")
 
 func LoadCredential(authFile string) (Credential, error) {
-	if path := strings.TrimSpace(authFile); path != "" {
-		return loadCredentialFile(expandHome(path))
+	creds, err := LoadCredentials(authFile)
+	if err != nil {
+		return Credential{}, err
 	}
-	return importLingmaCacheCredential()
+	if len(creds) == 0 {
+		return Credential{}, errors.New("no Lingma remote credential was loaded")
+	}
+	return creds[0], nil
 }
 
-func loadCredentialFile(path string) (Credential, error) {
+func LoadCredentials(authFile string) ([]Credential, error) {
+	if creds, err := LoadExplicitCredentials(authFile); err == nil && len(creds) > 0 {
+		return creds, nil
+	}
+
+	cred, err := importLingmaCacheCredential()
+	if err != nil {
+		return nil, err
+	}
+	return []Credential{cred}, nil
+}
+
+func LoadExplicitCredentials(authFile string) ([]Credential, error) {
+	if creds, err := loadEnvCredentials(); err == nil && len(creds) > 0 {
+		return creds, nil
+	}
+
+	if paths := parseCSV(authFile); len(paths) > 0 {
+		var out []Credential
+		var attempts []string
+		for _, path := range paths {
+			creds, err := loadCredentialFile(expandHome(path))
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) || errors.Is(err, errNoExplicitCredential) {
+					continue
+				}
+				attempts = append(attempts, fmt.Sprintf("%s: %v", path, err))
+				continue
+			}
+			out = append(out, creds...)
+		}
+		if len(out) > 0 {
+			return out, nil
+		}
+		if len(attempts) == 0 {
+			return nil, errors.New("Lingma explicit COSY credential is not configured")
+		}
+		return nil, fmt.Errorf("load Lingma remote auth files: %s", strings.Join(attempts, "; "))
+	}
+	return nil, errNoExplicitCredential
+}
+
+func loadEnvCredentials() ([]Credential, error) {
+	userIDs := parseCSV(os.Getenv("LINGMA_COSY_USER"))
+	keys := parseCSV(os.Getenv("LINGMA_COSY_KEY"))
+	infos := parseCSV(os.Getenv("LINGMA_AUTH_INFO"))
+	machineIDs := parseCSV(os.Getenv("LINGMA_MACHINE_ID"))
+	if len(userIDs) == 0 && len(keys) == 0 && len(infos) == 0 {
+		return nil, errors.New("Lingma env credential is not configured")
+	}
+
+	maxLen := max(len(userIDs), len(keys), len(infos), len(machineIDs))
+	out := make([]Credential, 0, maxLen)
+	for i := 0; i < maxLen; i++ {
+		cred := Credential{
+			UserID:          pickCSV(userIDs, i),
+			CosyKey:         pickCSV(keys, i),
+			EncryptUserInfo: pickCSV(infos, i),
+			MachineID:       valueOr(pickCSV(machineIDs, i), defaultMachineID()),
+			Source:          "environment",
+		}
+		if err := validateCredential(cred); err != nil {
+			return nil, err
+		}
+		out = append(out, cred)
+	}
+	return out, nil
+}
+
+func loadCredentialFile(path string) ([]Credential, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return Credential{}, fmt.Errorf("read remote auth file: %w", err)
+		return nil, fmt.Errorf("read remote auth file: %w", err)
 	}
+
+	var bundle storedCredentialBundle
+	if err := json.Unmarshal(body, &bundle); err == nil && len(bundle.Accounts) > 0 {
+		return storedCredentials(bundle.Accounts, path)
+	}
+
+	var list []storedCredentialFile
+	if err := json.Unmarshal(body, &list); err == nil && len(list) > 0 {
+		return storedCredentials(list, path)
+	}
+
 	var stored storedCredentialFile
 	if err := json.Unmarshal(body, &stored); err != nil {
-		return Credential{}, fmt.Errorf("parse remote auth file: %w", err)
+		return nil, fmt.Errorf("parse remote auth file: %w", err)
 	}
-	cred := Credential{
-		CosyKey:         stored.Auth.CosyKey,
-		EncryptUserInfo: stored.Auth.EncryptUserInfo,
-		UserID:          stored.Auth.UserID,
-		MachineID:       stored.Auth.MachineID,
-		Source:          valueOr(stored.Source, path),
-		TokenExpireTime: parseExpire(stored.TokenExpireTime),
+	return storedCredentials([]storedCredentialFile{stored}, path)
+}
+
+func storedCredentials(items []storedCredentialFile, path string) ([]Credential, error) {
+	out := make([]Credential, 0, len(items))
+	for i, stored := range items {
+		if stored.Lingma != nil {
+			nested := *stored.Lingma
+			if nested.Source == "" {
+				nested.Source = valueOr(stored.Email, stored.Source)
+			}
+			stored = nested
+		}
+		if strings.TrimSpace(stored.Auth.CosyKey) == "" &&
+			strings.TrimSpace(stored.Auth.EncryptUserInfo) == "" &&
+			strings.TrimSpace(stored.Auth.UserID) == "" {
+			continue
+		}
+		source := valueOr(stored.Source, path)
+		if len(items) > 1 && stored.Source == "" {
+			source = fmt.Sprintf("%s#%d", path, i+1)
+		}
+		cred := Credential{
+			CosyKey:         stored.Auth.CosyKey,
+			EncryptUserInfo: stored.Auth.EncryptUserInfo,
+			UserID:          stored.Auth.UserID,
+			MachineID:       stored.Auth.MachineID,
+			Source:          source,
+			TokenExpireTime: parseExpire(stored.TokenExpireTime),
+		}
+		if err := validateCredential(cred); err != nil {
+			return nil, err
+		}
+		out = append(out, cred)
 	}
-	return cred, validateCredential(cred)
+	if len(out) == 0 {
+		return nil, errNoExplicitCredential
+	}
+	return out, nil
+}
+
+func pickCSV(values []string, index int) string {
+	if len(values) == 0 {
+		return ""
+	}
+	if index < len(values) {
+		return strings.TrimSpace(values[index])
+	}
+	return strings.TrimSpace(values[len(values)-1])
+}
+
+func defaultMachineID() string {
+	if value := strings.TrimSpace(os.Getenv("LINGMA_MACHINE_ID")); value != "" {
+		return value
+	}
+	if host, err := os.Hostname(); err == nil && strings.TrimSpace(host) != "" {
+		return strings.TrimSpace(host) + "-" + newHexID()
+	}
+	return newHexID()
 }
 
 func importLingmaCacheCredential() (Credential, error) {
