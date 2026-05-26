@@ -17,7 +17,8 @@
     "uploads": "アップロード",
     "images": "AI 画像生成",
     "videos": "AI 動画生成",
-    "debug": "デバッグ"
+    "debug": "デバッグ",
+    "sessions": "セッション"
   },
   "common": {
     "refresh": "更新",

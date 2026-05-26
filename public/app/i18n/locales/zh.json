@@ -17,7 +17,8 @@
     "uploads": "文件上传",
     "images": "AI 生图",
     "videos": "AI 生视频",
-    "debug": "接口调试"
+    "debug": "接口调试",
+    "sessions": "会话列表"
   },
   "common": {
     "refresh": "刷新数据",
@@ -257,6 +258,23 @@
     "total": "总计",
     "rawJson": "原始响应 JSON",
     "apiOverview": "接口速览",
-    "apiOverviewSubtitle": "当前后台里最常用的调试与运维接口。"
+  ,"sessions": {
+    "subtitle": "查看和管理保存的对话会话",
+    "chatId": "会话 ID",
+    "model": "模型",
+    "account": "账号",
+    "updatedAt": "更新时间",
+    "viewChat": "查看",
+    "deleteSession": "删除会话",
+    "openInQwen": "在 Qwen 打开",
+    "chatDetail": "会话详情",
+    "chatDetailSubtitle": "点击左侧列表中的查看按钮加载会话详情",
+    "sessionInfo": "会话信息",
+    "chatType": "类型",
+    "messages": "消息",
+    "noMessages": "暂无消息记录",
+    "selectToView": "选择左侧会话查看详情",
+    "noSessions": "暂无会话数据",
+    "confirmDelete": "确认删除此会话？"
   }
 }

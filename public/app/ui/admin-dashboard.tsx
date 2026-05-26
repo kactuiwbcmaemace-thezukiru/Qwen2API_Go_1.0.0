@@ -33,6 +33,7 @@ import { PromptsTab } from "./components/prompts-tab";
 import { SettingsTab } from "./components/settings-tab";
 import { UploadsTab } from "./components/uploads-tab";
 import { DataScreenTab } from "./components/datascreen-tab";
+import { SessionsTab } from "./components/sessions-tab";
 import { formatCompactNumber } from "./components/dashboard-charts";
 import { PROMPT_IDS, promptValue } from "./prompts";
 import type { TabKey } from "./types";
@@ -60,6 +61,7 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
     { key: "uploads", label: t("nav.uploads"), icon: <Upload size={18} /> },
     { key: "images", label: t("nav.images"), icon: <ImageIcon size={18} /> },
     { key: "videos", label: t("nav.videos"), icon: <Video size={18} /> },
+    { key: "sessions", label: t("nav.sessions"), icon: <MessageSquareText size={18} /> },
     { key: "debug", label: t("nav.debug"), icon: <Bug size={18} /> },
   ];
 
@@ -329,6 +331,9 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
               apiKey={state.apiKey}
               defaultPrompt={promptValue(state.prompts, PROMPT_IDS.videoDefault)}
             />
+          ) : null}
+          {state.activeTab === "sessions" ? (
+            <SessionsTab apiKey={state.apiKey} />
           ) : null}
           {state.activeTab === "debug" ? (
             <DebugTab
