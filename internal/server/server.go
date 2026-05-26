@@ -125,9 +125,17 @@ func New(cfg config.Config, keyring *auth.Keyring, openAIHandler *openai.Handler
 	handle("/api/dashboard/stream", "admin", ensureMethod(http.MethodGet, withAdminKey(adminHandler.HandleDashboardStream)))
 
 	// Conversation sessions management
-	handle("/api/sessions", "admin", ensureMethod(http.MethodGet, withAdminKey(adminHandler.HandleSessions)))
+	handle("/api/sessions", "admin", withAdminKey(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			adminHandler.HandleSessions(w, r)
+		case http.MethodDelete:
+			adminHandler.HandleDeleteSession(w, r)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "Method Not Allowed"})
+		}
+	}))
 	handle("/api/sessions/chat", "admin", ensureMethod(http.MethodGet, withAdminKey(adminHandler.HandleSessionChat)))
-	handle("/api/sessions", "admin", ensureMethod(http.MethodDelete, withAdminKey(adminHandler.HandleDeleteSession)))
 
 	publicDir := filepath.Join("public", "out")
 	staticFS := http.FileServer(http.Dir(publicDir))
