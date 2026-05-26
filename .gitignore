@@ -1,4 +1,21 @@
 ```
+# Compiled and binary files
+*.exe
+*.dll
+*.so
+*.a
+*.obj
+*.out
+
 # Dependencies
-qwen2api/
+go.sum
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Environment
+.env
+.env.local
+*.env.*
 ```
