@@ -258,7 +258,9 @@
     "total": "总计",
     "rawJson": "原始响应 JSON",
     "apiOverview": "接口速览",
-  ,"sessions": {
+    "apiOverviewSubtitle": "当前后台里最常用的侦错与运维接口。"
+  },
+  "sessions": {
     "subtitle": "查看和管理保存的对话会话",
     "chatId": "会话 ID",
     "model": "模型",

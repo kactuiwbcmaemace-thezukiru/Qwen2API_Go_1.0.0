@@ -259,5 +259,24 @@
     "rawJson": "Raw JSON",
     "apiOverview": "API Overview",
     "apiOverviewSubtitle": "Common debug and ops endpoints."
+  },
+  "sessions": {
+    "subtitle": "View and manage saved chat sessions",
+    "chatId": "Chat ID",
+    "model": "Model",
+    "account": "Account",
+    "updatedAt": "Updated At",
+    "viewChat": "View",
+    "deleteSession": "Delete Session",
+    "openInQwen": "Open in Qwen",
+    "chatDetail": "Chat Detail",
+    "chatDetailSubtitle": "Click View button in left list to load chat details",
+    "sessionInfo": "Session Info",
+    "chatType": "Type",
+    "messages": "Messages",
+    "noMessages": "No messages found",
+    "selectToView": "Select a session from left to view details",
+    "noSessions": "No sessions found",
+    "confirmDelete": "Confirm delete this session?"
   }
 }

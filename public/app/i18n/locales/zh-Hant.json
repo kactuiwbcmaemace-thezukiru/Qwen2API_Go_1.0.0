@@ -259,5 +259,24 @@
     "rawJson": "原始回應 JSON",
     "apiOverview": "介面速覽",
     "apiOverviewSubtitle": "目前後台裡最常用的偵錯與維運介面。"
+  },
+  "sessions": {
+    "subtitle": "檢視和管理已儲存的對話會話",
+    "chatId": "會話 ID",
+    "model": "模型",
+    "account": "帳號",
+    "updatedAt": "更新時間",
+    "viewChat": "檢視",
+    "deleteSession": "刪除會話",
+    "openInQwen": "在 Qwen 開啟",
+    "chatDetail": "會話詳情",
+    "chatDetailSubtitle": "點選左側列表中的檢視按鈕載入會話詳情",
+    "sessionInfo": "會話資訊",
+    "chatType": "類型",
+    "messages": "訊息",
+    "noMessages": "暫無訊息記錄",
+    "selectToView": "選擇左側會話檢視詳情",
+    "noSessions": "暫無會話資料",
+    "confirmDelete": "確認刪除此會話？"
   }
 }

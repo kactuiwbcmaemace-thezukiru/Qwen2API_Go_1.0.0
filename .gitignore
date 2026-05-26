@@ -5,31 +5,7 @@ node_modules/
 # Build artifacts
 dist/
 build/
-*.js
-*.ts
-*.tsx
-*.jsx
-
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# Environment
-.env
-.env.local
-.env.*
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Coverage
-coverage/
-htmlcov/
-.coverage
+target/
 
 # Python
 __pycache__/
@@ -37,21 +13,38 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-*.so
-*.egg-info/
-.eggs/
+env/
+venv/
+.venv/
+.ENV
+.ENV.*
+.python-version
 
-# Compiled and binary
-*.exe
-*.dll
-*.so
-*.a
-*.o
-*.obj
-*.out
-*.class
+# Logs
+*.log
 
-# Compression
+# Environment variables
+.env
+.env.local
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Compressed files
 *.zip
 *.gz
 *.tar
@@ -70,8 +63,8 @@ __pycache__/
 *.Z
 *.lz
 *.lzo
-
-# System
-.DS_Store
-Thumbs.db
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 ```

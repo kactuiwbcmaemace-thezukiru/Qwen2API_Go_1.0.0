@@ -259,5 +259,24 @@
     "rawJson": "生 JSON",
     "apiOverview": "API 概要",
     "apiOverviewSubtitle": "最も使用されるデバッグと運用 API。"
+  },
+  "sessions": {
+    "subtitle": "保存されたチャットセッションの表示と管理",
+    "chatId": "チャット ID",
+    "model": "モデル",
+    "account": "アカウント",
+    "updatedAt": "更新日時",
+    "viewChat": "表示",
+    "deleteSession": "セッションを削除",
+    "openInQwen": "Qwen で開く",
+    "chatDetail": "チャット詳細",
+    "chatDetailSubtitle": "左側のリストから表示ボタンをクリックしてチャット詳細を読み込みます",
+    "sessionInfo": "セッション情報",
+    "chatType": "タイプ",
+    "messages": "メッセージ",
+    "noMessages": "メッセージが見つかりません",
+    "selectToView": "左側からセッションを選択して詳細を表示",
+    "noSessions": "セッションが見つかりません",
+    "confirmDelete": "このセッションを削除してもよろしいですか？"
   }
 }
