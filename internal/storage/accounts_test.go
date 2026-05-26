@@ -2,7 +2,7 @@ package storage
 
 import (
 	"path/filepath"
-	"slices"
+	"sort"
 	"testing"
 	"time"
 
@@ -147,25 +147,11 @@ func assertAccountsEqual(t *testing.T, got, want []Account) {
 	t.Helper()
 	gotCopy := append([]Account(nil), got...)
 	wantCopy := append([]Account(nil), want...)
-	slices.SortFunc(gotCopy, func(a, b Account) int {
-		switch {
-		case a.Email < b.Email:
-			return -1
-		case a.Email > b.Email:
-			return 1
-		default:
-			return 0
-		}
+	sort.Slice(gotCopy, func(i, j int) bool {
+		return gotCopy[i].Email < gotCopy[j].Email
 	})
-	slices.SortFunc(wantCopy, func(a, b Account) int {
-		switch {
-		case a.Email < b.Email:
-			return -1
-		case a.Email > b.Email:
-			return 1
-		default:
-			return 0
-		}
+	sort.Slice(wantCopy, func(i, j int) bool {
+		return wantCopy[i].Email < wantCopy[j].Email
 	})
 	if len(gotCopy) != len(wantCopy) {
 		t.Fatalf("account len = %d, want %d", len(gotCopy), len(wantCopy))

@@ -1,14 +1,11 @@
 ```
-# Compiled and binary files
-*.exe
-*.dll
-*.so
-*.a
+# Compiled and build artifacts
+*.o
 *.obj
 *.out
 
 # Dependencies
-go.sum
+vendor/
 
 # Logs and temp files
 *.log
@@ -18,4 +15,8 @@ go.sum
 .env
 .env.local
 *.env.*
+
+# Editors
+.vscode/
+.idea/
 ```
