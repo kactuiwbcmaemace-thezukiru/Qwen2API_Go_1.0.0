@@ -269,6 +269,11 @@ export function SessionsTab({ apiKey }: { apiKey: string }) {
           {selectedChat?.note ? (
             <div className="mb-4 rounded-lg bg-[var(--warning-light)] p-3 text-sm font-medium text-[var(--warning)]">{selectedChat.note}</div>
           ) : null}
+          {selectedChat?.web_interface_url ? (
+            <div className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface-hover)] p-3 text-xs leading-5 text-[var(--text-secondary)]">
+              Open in Qwen uses the upstream chat_id. It only works while Qwen still has that chat and your browser is logged into the same account shown above.
+            </div>
+          ) : null}
           {!selectedChat && !loadingChat ? (
             <div className="rounded-xl border border-dashed border-[var(--border)] p-8 text-center text-sm text-[var(--text-secondary)]">
               Choose a cached session from the table above.

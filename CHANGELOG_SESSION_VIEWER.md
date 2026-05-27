@@ -111,3 +111,31 @@ POST /api/sessions/clear-expired
 - TS/TSX syntax transpile check успешно прошёл по изменённым frontend-файлам.
 - Полный `go test ./...` в sandbox не завершился, потому что окружение не имеет доступа к `proxy.golang.org` и не может скачать отсутствующие модули `github.com/aliyun/aliyun-oss-go-sdk` и `github.com/redis/go-redis/v9`.
 - Полная Next/TypeScript сборка в sandbox не запускалась, потому что в архиве нет `public/node_modules`, а установка npm-зависимостей требует сети.
+
+## Дополнительное исправление: продолжение одного Qwen-чата в tool loop
+
+После первого теста в Cline стало видно, что каждый шаг tool loop создавал отдельный upstream Qwen chat. Причина была в том, что mapping сохранялся только для context hash входящего запроса, но следующий OpenAI-compatible запрос уже содержит новый префикс истории: предыдущие `user/assistant/tool` сообщения плюс новый последний `tool` или `user` message.
+
+Исправлено:
+
+- `internal/openai/handler.go`
+  - После каждого успешного ответа теперь дополнительно вычисляется continuation context hash для состояния диалога **после** assistant response.
+  - Для tool loop используется sentinel tail message, чтобы tool reminder не попадал в hash предыдущего assistant tool call и следующий запрос находил тот же upstream `chat_id`.
+
+- `internal/openai/conversation_sessions.go`
+  - Добавлен `CacheExchangeWithAliases(...)`: один и тот же upstream Qwen chat теперь может иметь несколько context-hash aliases.
+  - `ListAll()` дедуплицирует aliases по `account_email + chat_id`, чтобы вкладка **Cached Chats** не превращалась в список дублей одного и того же разговора.
+  - `Delete(context_hash)` удаляет все aliases выбранного upstream чата, а не только один hash.
+  - Добавлен `computeContextHashForPrefix(...)` для явного hashing уже готового префикса истории.
+
+Практический эффект:
+
+- Обычный multi-turn клиент должен продолжать один и тот же upstream Qwen chat.
+- Cline/Roo-style tool loop больше не должен создавать новый Qwen chat на каждом `tool_result` шаге.
+- В админке один upstream chat должен отображаться одной строкой, а не серией почти одинаковых записей.
+
+Примечание про кнопку **Open in Qwen**:
+
+- Эта кнопка открывает `https://chat.qwen.ai/c/<chat_id>`.
+- Она сработает только если сам сайт Qwen всё ещё видит этот chat id и браузер залогинен именно в тот же Qwen-аккаунт, который указан в строке `Account`.
+- Даже если proxy-cache показывает сообщения, это не доказывает, что Qwen UI отдаст этот чат в браузере: proxy-cache хранится локально, а Qwen UI проверяет upstream историю и текущую browser-сессию.

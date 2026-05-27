@@ -922,13 +922,22 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		if h.sessions == nil || executed == nil {
 			return
 		}
-		h.sessions.CacheExchange(
-			executed.ContextHash,
+		requestMessages := cloneMessageList(payload.Messages)
+		continuationHash := h.computeContinuationContextHash(
+			executed.Model,
+			executed.ChatType,
+			requestMessages,
+			assistantMessage,
+			payload.Tools,
+			payload.ToolChoice,
+		)
+		h.sessions.CacheExchangeWithAliases(
+			[]string{executed.ContextHash, continuationHash},
 			executed.AccountEmail,
 			executed.ChatID,
 			executed.Model,
 			executed.ChatType,
-			cloneMessageList(payload.Messages),
+			requestMessages,
 			assistantMessage,
 			executed.ToolNames,
 		)
@@ -939,6 +948,25 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.handleNonStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.ToolNames, executed.ToolSchemas, estimatedPromptTokens, cacheConversation)
+}
+
+func (h *Handler) computeContinuationContextHash(model, chatType string, requestMessages []map[string]any, assistantMessage map[string]any, tools any, toolChoice any) string {
+	if assistantMessage == nil {
+		return ""
+	}
+	messages := cloneMessageList(requestMessages)
+	messages = append(messages, cloneMap(assistantMessage))
+	// The hash used to look up an existing upstream chat is always computed from
+	// the next request with the new incoming user/tool message excluded. Add a
+	// sentinel tail message here so tool-call prompt reminders are attached to the
+	// sentinel and excluded from the prefix hash, matching the next real request.
+	messages = append(messages, map[string]any{
+		"role":    "user",
+		"content": "__qwen2api_context_anchor__",
+	})
+	injected := injectQwenWeb2ControlPrompt(messages, h.qwenWeb2ControlPrompt())
+	injection := toolcall.InjectPromptWithOverrides(injected, tools, toolChoice, h.promptOverrides())
+	return computeContextHash(model, chatType, injection.ToolNames, injection.Messages)
 }
 
 func shouldReplyHi(payload chatRequest) bool {
