@@ -152,6 +152,45 @@ export type ModelsResponse = {
   data: ModelItem[];
 };
 
+
+export type CachedChatMessage = {
+  id: string;
+  role: string;
+  content: string;
+  reasoning_content?: string;
+  tool_calls?: unknown[];
+  created_at: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type SessionItem = {
+  context_hash: string;
+  account_email: string;
+  chat_id: string;
+  model: string;
+  chat_type: string;
+  created_at?: number;
+  created_time?: string;
+  updated_at: number;
+  updated_time: string;
+  last_message?: string;
+  message_count?: number;
+  has_tools?: boolean;
+  tools_used?: string[];
+};
+
+export type SessionsResponse = {
+  total: number;
+  sessions: SessionItem[];
+};
+
+export type SessionChatResponse = {
+  session: SessionItem;
+  messages: CachedChatMessage[];
+  note?: string;
+  web_interface_url?: string;
+};
+
 export type BatchTaskResponse = {
   taskId: string;
   status: string;
@@ -226,8 +265,8 @@ export type ToastState = {
   message: string;
 } | null;
 
-export type Tone = "default" | "success" | "warning" | "danger";
+export type Tone = "default" | "success" | "warning" | "danger" | "primary";
 
-export type TabKey = "overview" | "datascreen" | "accounts" | "settings" | "prompts" | "models" | "uploads" | "debug" | "images" | "videos";
+export type TabKey = "overview" | "datascreen" | "accounts" | "settings" | "prompts" | "models" | "uploads" | "sessions" | "debug" | "images" | "videos";
 
 export type ThemeMode = "light" | "dark";

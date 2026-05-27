@@ -31,6 +31,7 @@ import { ModelsTab } from "./components/models-tab";
 import { OverviewTab } from "./components/overview-tab";
 import { PromptsTab } from "./components/prompts-tab";
 import { SettingsTab } from "./components/settings-tab";
+import { SessionsTab } from "./components/sessions-tab";
 import { UploadsTab } from "./components/uploads-tab";
 import { DataScreenTab } from "./components/datascreen-tab";
 import { formatCompactNumber } from "./components/dashboard-charts";
@@ -58,6 +59,7 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
     { key: "prompts", label: t("nav.prompts"), icon: <MessageSquareText size={18} /> },
     { key: "models", label: t("nav.models"), icon: <Brain size={18} /> },
     { key: "uploads", label: t("nav.uploads"), icon: <Upload size={18} /> },
+    { key: "sessions", label: t("nav.sessions"), icon: <MessageSquareText size={18} /> },
     { key: "images", label: t("nav.images"), icon: <ImageIcon size={18} /> },
     { key: "videos", label: t("nav.videos"), icon: <Video size={18} /> },
     { key: "debug", label: t("nav.debug"), icon: <Bug size={18} /> },
@@ -316,6 +318,7 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
           ) : null}
 
           {state.activeTab === "uploads" ? <UploadsTab apiKey={state.apiKey} /> : null}
+          {state.activeTab === "sessions" ? <SessionsTab apiKey={state.apiKey} /> : null}
           {state.activeTab === "images" ? (
             <AssetGenerationTab
               kind="image"

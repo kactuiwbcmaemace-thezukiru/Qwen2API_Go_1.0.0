@@ -27,6 +27,10 @@ type executedChatRequest struct {
 type executedChat struct {
 	Model          string
 	RequestedModel string
+	ChatType       string
+	ContextHash    string
+	AccountEmail   string
+	ChatID         string
 	ToolNames      []string
 	ToolSchemas    []toolcall.ToolSchema
 	Stream         io.ReadCloser
@@ -260,6 +264,10 @@ func (h *Handler) sendChatWithSessionAttempt(ctx context.Context, prepared prepa
 	return &executedChat{
 		Model:          prepared.Model,
 		RequestedModel: prepared.RequestedModel,
+		ChatType:       prepared.ChatType,
+		ContextHash:    prepared.ContextHash,
+		AccountEmail:   session.Email,
+		ChatID:         chatID,
 		ToolNames:      prepared.ToolNames,
 		Stream:         stream,
 		ToolSchemas:    prepared.ToolSchemas,

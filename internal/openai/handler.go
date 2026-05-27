@@ -918,11 +918,27 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 	defer executed.Stream.Close()
 
+	cacheConversation := func(assistantMessage map[string]any) {
+		if h.sessions == nil || executed == nil {
+			return
+		}
+		h.sessions.CacheExchange(
+			executed.ContextHash,
+			executed.AccountEmail,
+			executed.ChatID,
+			executed.Model,
+			executed.ChatType,
+			cloneMessageList(payload.Messages),
+			assistantMessage,
+			executed.ToolNames,
+		)
+	}
+
 	if payload.Stream {
-		h.handleStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.ToolNames, executed.ToolSchemas, estimatedPromptTokens)
+		h.handleStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.ToolNames, executed.ToolSchemas, estimatedPromptTokens, cacheConversation)
 		return
 	}
-	h.handleNonStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.ToolNames, executed.ToolSchemas, estimatedPromptTokens)
+	h.handleNonStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.ToolNames, executed.ToolSchemas, estimatedPromptTokens, cacheConversation)
 }
 
 func shouldReplyHi(payload chatRequest) bool {
@@ -1009,7 +1025,7 @@ func (h *Handler) writeHiResponse(w http.ResponseWriter, model string, stream bo
 	}
 }
 
-func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int) {
+func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int, cacheConversation func(map[string]any)) {
 	setSSEHeaders(w)
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(body)
@@ -1020,6 +1036,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 	promptTokens, completionTokens, totalTokens := 0, 0, 0
 	var contentBuilder strings.Builder
 	toolCallsSent := false
+	cachedToolCalls := make([]any, 0)
 	streamState := toolcall.NewStreamState()
 
 	for scanner.Scan() {
@@ -1084,7 +1101,11 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 			h.logger.DebugModule("OPENAI", "stream tool sieve model=%s input=%q raw_visible=%q tool_calls=%s", model, content, chunkResult.Content, debugJSON(chunkResult.ToolCalls))
 			if len(chunkResult.ToolCalls) > 0 {
 				toolCallsSent = true
-				h.logger.DebugModule("OPENAI", "stream emit tool calls model=%s tool_calls=%s", model, debugJSON(toolcall.FormatOpenAIToolCallsWithSchemas(chunkResult.ToolCalls, toolSchemas)))
+				formattedToolCalls := toolcall.FormatOpenAIToolCallsWithSchemas(chunkResult.ToolCalls, toolSchemas)
+				for _, call := range formattedToolCalls {
+					cachedToolCalls = append(cachedToolCalls, call)
+				}
+				h.logger.DebugModule("OPENAI", "stream emit tool calls model=%s tool_calls=%s", model, debugJSON(formattedToolCalls))
 				writeSSE(w, map[string]any{
 					"id":      messageID,
 					"object":  "chat.completion.chunk",
@@ -1148,7 +1169,11 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 		}
 		if len(finalResult.ToolCalls) > 0 {
 			toolCallsSent = true
-			h.logger.DebugModule("OPENAI", "stream emit final tool calls model=%s tool_calls=%s", model, debugJSON(toolcall.FormatOpenAIToolCallsWithSchemas(finalResult.ToolCalls, toolSchemas)))
+			formattedToolCalls := toolcall.FormatOpenAIToolCallsWithSchemas(finalResult.ToolCalls, toolSchemas)
+			for _, call := range formattedToolCalls {
+				cachedToolCalls = append(cachedToolCalls, call)
+			}
+			h.logger.DebugModule("OPENAI", "stream emit final tool calls model=%s tool_calls=%s", model, debugJSON(formattedToolCalls))
 			writeSSE(w, map[string]any{
 				"id":      messageID,
 				"object":  "chat.completion.chunk",
@@ -1204,6 +1229,19 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 	})
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	h.metrics.RecordModelUsage(statsModel, promptTokens, completionTokens, totalTokens)
+	if cacheConversation != nil {
+		assistantMessage := map[string]any{
+			"role":    "assistant",
+			"content": strings.TrimSpace(contentBuilder.String()),
+		}
+		if len(cachedToolCalls) > 0 {
+			if strings.TrimSpace(contentBuilder.String()) == "" {
+				assistantMessage["content"] = nil
+			}
+			assistantMessage["tool_calls"] = cachedToolCalls
+		}
+		cacheConversation(assistantMessage)
+	}
 	h.logger.DebugModule("OPENAI", "stream completed model=%s final_content=%q finish_reason=%s usage=%s", model, contentBuilder.String(), func() string {
 		if toolCallsSent {
 			return "tool_calls"
@@ -1216,7 +1254,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 	}))
 }
 
-func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int) {
+func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int, cacheConversation func(map[string]any)) {
 	result, upstreamErr, err := h.readCompletedChat(body, model, toolNames)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "读取上游响应失败"})
@@ -1257,6 +1295,9 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model s
 		"total_tokens":      result.TotalTokens,
 	}))
 	h.metrics.RecordModelUsage(statsModel, result.PromptTokens, result.CompletionTokens, result.TotalTokens)
+	if cacheConversation != nil {
+		cacheConversation(message)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
 		"object":  "chat.completion",

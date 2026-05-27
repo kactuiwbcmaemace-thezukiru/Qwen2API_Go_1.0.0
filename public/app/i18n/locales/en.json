@@ -17,7 +17,8 @@
     "uploads": "Uploads",
     "images": "AI Images",
     "videos": "AI Videos",
-    "debug": "Debug"
+    "debug": "Debug",
+    "sessions": "Cached Chats"
   },
   "common": {
     "refresh": "Refresh",
