@@ -1110,24 +1110,31 @@ func (h *Handler) HandleSessionChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessions, err := h.sessions.ListAll()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	sort.SliceStable(sessions, func(i, j int) bool {
-		return sessions[i].UpdatedAt > sessions[j].UpdatedAt
-	})
-
 	var found *storage.ConversationSession
-	for i := range sessions {
-		if contextHash != "" && sessions[i].ContextHash == contextHash {
-			found = &sessions[i]
-			break
+	if contextHash != "" {
+		if session, ok := h.sessions.Get(contextHash); ok {
+			found = &session
 		}
-		if contextHash == "" && chatID != "" && sessions[i].ChatID == chatID {
-			found = &sessions[i]
-			break
+	}
+	if found == nil {
+		sessions, err := h.sessions.ListAll()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		sort.SliceStable(sessions, func(i, j int) bool {
+			return sessions[i].UpdatedAt > sessions[j].UpdatedAt
+		})
+
+		for i := range sessions {
+			if contextHash != "" && sessions[i].ContextHash == contextHash {
+				found = &sessions[i]
+				break
+			}
+			if contextHash == "" && chatID != "" && sessions[i].ChatID == chatID {
+				found = &sessions[i]
+				break
+			}
 		}
 	}
 

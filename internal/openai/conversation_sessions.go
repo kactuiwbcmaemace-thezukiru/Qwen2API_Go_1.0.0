@@ -71,7 +71,46 @@ func (s *ConversationSessionService) Save(contextHash, accountEmail, chatID, mod
 // history, so replacing the cached message slice with the newest snapshot avoids
 // duplicates while keeping the viewer useful for debugging.
 func (s *ConversationSessionService) CacheExchange(contextHash, accountEmail, chatID, model, chatType string, requestMessages []map[string]any, assistantMessage map[string]any, toolNames []string) {
-	s.saveSession(contextHash, accountEmail, chatID, model, chatType, requestMessages, assistantMessage, toolNames, true)
+	s.CacheExchangeWithAliases([]string{contextHash}, accountEmail, chatID, model, chatType, requestMessages, assistantMessage, toolNames)
+}
+
+// CacheExchangeWithAliases writes the same chat snapshot under multiple context
+// hashes. OpenAI-compatible coding clients resend the full visible transcript on
+// every request, so the lookup key for the next request is the transcript after
+// the assistant response from the previous request. Keeping both the request
+// prefix key and the continuation key mapped to the same upstream Qwen chat lets
+// tool loops continue in one Qwen conversation instead of creating a fresh chat
+// after every tool call.
+func (s *ConversationSessionService) CacheExchangeWithAliases(contextHashes []string, accountEmail, chatID, model, chatType string, requestMessages []map[string]any, assistantMessage map[string]any, toolNames []string) {
+	hashes := normalizeContextHashAliases(contextHashes, chatID)
+	if len(hashes) == 0 {
+		return
+	}
+	for _, hash := range hashes {
+		s.saveSession(hash, accountEmail, chatID, model, chatType, requestMessages, assistantMessage, toolNames, true)
+	}
+}
+
+func normalizeContextHashAliases(contextHashes []string, chatID string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(contextHashes)+1)
+	for _, hash := range contextHashes {
+		hash = strings.TrimSpace(hash)
+		if hash == "" {
+			continue
+		}
+		if _, ok := seen[hash]; ok {
+			continue
+		}
+		seen[hash] = struct{}{}
+		result = append(result, hash)
+	}
+	if len(result) == 0 {
+		if fallback := cacheContextHash("", chatID); fallback != "" {
+			result = append(result, fallback)
+		}
+	}
+	return result
 }
 
 func (s *ConversationSessionService) saveSession(contextHash, accountEmail, chatID, model, chatType string, requestMessages []map[string]any, assistantMessage map[string]any, toolNames []string, updateMessages bool) {
@@ -321,8 +360,25 @@ func (s *ConversationSessionService) Delete(contextHash string) {
 	if s == nil || s.store == nil || strings.TrimSpace(contextHash) == "" {
 		return
 	}
-	if err := s.store.DeleteConversationSession(contextHash); err != nil && s.logger != nil {
-		s.logger.WarnModule("OPENAI", "delete conversation session failed hash=%s err=%v", contextHash, err)
+	contextHash = strings.TrimSpace(contextHash)
+	deleted := map[string]struct{}{contextHash: {}}
+
+	if session, ok, err := s.store.GetConversationSession(contextHash); err == nil && ok {
+		if strings.TrimSpace(session.ChatID) != "" {
+			if sessions, listErr := s.store.ListConversationSessions(); listErr == nil {
+				for _, candidate := range sessions {
+					if sameConversationSession(session, candidate) {
+						deleted[candidate.ContextHash] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+
+	for hash := range deleted {
+		if err := s.store.DeleteConversationSession(hash); err != nil && s.logger != nil {
+			s.logger.WarnModule("OPENAI", "delete conversation session failed hash=%s err=%v", hash, err)
+		}
 	}
 }
 
@@ -354,11 +410,18 @@ func computeContextHash(model, chatType string, toolNames []string, expandedMess
 	if len(expandedMessages) <= 1 {
 		return ""
 	}
+	return computeContextHashForPrefix(model, chatType, toolNames, expandedMessages[:len(expandedMessages)-1])
+}
+
+func computeContextHashForPrefix(model, chatType string, toolNames []string, prefixMessages []map[string]any) string {
+	if len(prefixMessages) == 0 {
+		return ""
+	}
 	payload := map[string]any{
 		"model":      strings.TrimSpace(model),
 		"chat_type":  strings.TrimSpace(chatType),
 		"tool_names": append([]string(nil), toolNames...),
-		"messages":   expandedMessages[:len(expandedMessages)-1],
+		"messages":   cloneMessageList(prefixMessages),
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -376,5 +439,52 @@ func (s *ConversationSessionService) ListAll() ([]storage.ConversationSession, e
 	if err := s.cleanupExpired(); err != nil {
 		return nil, err
 	}
-	return s.store.ListConversationSessions()
+	sessions, err := s.store.ListConversationSessions()
+	if err != nil {
+		return nil, err
+	}
+	return dedupeConversationSessionAliases(sessions), nil
+}
+
+func dedupeConversationSessionAliases(sessions []storage.ConversationSession) []storage.ConversationSession {
+	byChat := map[string]storage.ConversationSession{}
+	result := make([]storage.ConversationSession, 0, len(sessions))
+	for _, session := range sessions {
+		key := conversationAliasKey(session)
+		if key == "" {
+			result = append(result, session)
+			continue
+		}
+		existing, ok := byChat[key]
+		if !ok || sessionIsMoreUseful(session, existing) {
+			byChat[key] = session
+		}
+	}
+	for _, session := range byChat {
+		result = append(result, session)
+	}
+	return result
+}
+
+func conversationAliasKey(session storage.ConversationSession) string {
+	accountEmail := strings.TrimSpace(session.AccountEmail)
+	chatID := strings.TrimSpace(session.ChatID)
+	if accountEmail == "" || chatID == "" {
+		return ""
+	}
+	return strings.ToLower(accountEmail) + "\x00" + chatID
+}
+
+func sameConversationSession(a, b storage.ConversationSession) bool {
+	return conversationAliasKey(a) != "" && conversationAliasKey(a) == conversationAliasKey(b)
+}
+
+func sessionIsMoreUseful(candidate, existing storage.ConversationSession) bool {
+	if candidate.UpdatedAt != existing.UpdatedAt {
+		return candidate.UpdatedAt > existing.UpdatedAt
+	}
+	if candidate.MessageCount != existing.MessageCount {
+		return candidate.MessageCount > existing.MessageCount
+	}
+	return len(candidate.Messages) > len(existing.Messages)
 }
