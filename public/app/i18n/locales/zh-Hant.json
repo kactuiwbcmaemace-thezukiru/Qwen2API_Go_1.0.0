@@ -17,7 +17,8 @@
     "uploads": "檔案上傳",
     "images": "AI 生圖",
     "videos": "AI 生影片",
-    "debug": "介面偵錯"
+    "debug": "介面偵錯",
+    "sessions": "快取會話"
   },
   "common": {
     "refresh": "重新整理資料",

@@ -12,12 +12,31 @@ import (
 )
 
 type ConversationSession struct {
-	ContextHash  string `json:"context_hash"`
-	AccountEmail string `json:"account_email"`
-	ChatID       string `json:"chat_id"`
-	Model        string `json:"model"`
-	ChatType     string `json:"chat_type"`
-	UpdatedAt    int64  `json:"updated_at"`
+	ContextHash  string              `json:"context_hash"`
+	AccountEmail string              `json:"account_email"`
+	ChatID       string              `json:"chat_id"`
+	Model        string              `json:"model"`
+	ChatType     string              `json:"chat_type"`
+	CreatedAt    int64               `json:"created_at,omitempty"`
+	UpdatedAt    int64               `json:"updated_at"`
+	LastMessage  string              `json:"last_message,omitempty"`
+	MessageCount int                 `json:"message_count,omitempty"`
+	HasTools     bool                `json:"has_tools,omitempty"`
+	ToolsUsed    []string            `json:"tools_used,omitempty"`
+	Messages     []CachedChatMessage `json:"messages,omitempty"`
+}
+
+// CachedChatMessage is a compact, admin-safe representation of a proxied
+// message. It intentionally stores display text and normalized tool metadata
+// instead of raw upstream payloads.
+type CachedChatMessage struct {
+	ID               string         `json:"id"`
+	Role             string         `json:"role"`
+	Content          string         `json:"content"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []any          `json:"tool_calls,omitempty"`
+	CreatedAt        int64          `json:"created_at"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
 }
 
 type ConversationStore interface {

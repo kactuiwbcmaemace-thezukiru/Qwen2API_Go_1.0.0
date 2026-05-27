@@ -125,6 +125,7 @@ func New(cfg config.Config, keyring *auth.Keyring, openAIHandler *openai.Handler
 	handle("/api/dashboard/stream", "admin", ensureMethod(http.MethodGet, withAdminKey(adminHandler.HandleDashboardStream)))
 
 	// Conversation sessions management
+	handle("/api/sessions/clear-expired", "admin", ensureMethod(http.MethodPost, withAdminKey(adminHandler.HandleClearExpiredSessions)))
 	handle("/api/sessions", "admin", withAdminKey(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

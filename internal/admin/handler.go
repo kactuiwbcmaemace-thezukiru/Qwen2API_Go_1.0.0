@@ -1044,7 +1044,7 @@ func (h *Handler) HandleDashboardStream(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// HandleSessions returns a list of all active conversation sessions
+// HandleSessions returns a list of cached conversation sessions.
 func (h *Handler) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	if h.sessions == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "会话服务未初始化"})
@@ -1056,19 +1056,13 @@ func (h *Handler) HandleSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt > sessions[j].UpdatedAt
+	})
 
-	// Enrich sessions with additional info
 	result := make([]map[string]any, 0, len(sessions))
-	for _, s := range sessions {
-		result = append(result, map[string]any{
-			"context_hash":  s.ContextHash,
-			"account_email": s.AccountEmail,
-			"chat_id":       s.ChatID,
-			"model":         s.Model,
-			"chat_type":     s.ChatType,
-			"updated_at":    s.UpdatedAt,
-			"updated_time":  time.UnixMilli(s.UpdatedAt).Format(time.RFC3339),
-		})
+	for _, session := range sessions {
+		result = append(result, h.sessionSummary(session))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -1077,29 +1071,61 @@ func (h *Handler) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleSessionChat retrieves chat history for a specific session by chat_id
+func (h *Handler) sessionSummary(session storage.ConversationSession) map[string]any {
+	return map[string]any{
+		"context_hash":  session.ContextHash,
+		"account_email": session.AccountEmail,
+		"chat_id":       session.ChatID,
+		"model":         session.Model,
+		"chat_type":     session.ChatType,
+		"created_at":    session.CreatedAt,
+		"created_time":  formatUnixMilli(session.CreatedAt),
+		"updated_at":    session.UpdatedAt,
+		"updated_time":  formatUnixMilli(session.UpdatedAt),
+		"last_message":  session.LastMessage,
+		"message_count": session.MessageCount,
+		"has_tools":     session.HasTools,
+		"tools_used":    append([]string(nil), session.ToolsUsed...),
+	}
+}
+
+func formatUnixMilli(value int64) string {
+	if value <= 0 {
+		return ""
+	}
+	return time.UnixMilli(value).Format(time.RFC3339)
+}
+
+// HandleSessionChat retrieves cached chat history for a specific session.
 func (h *Handler) HandleSessionChat(w http.ResponseWriter, r *http.Request) {
 	if h.sessions == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "会话服务未初始化"})
 		return
 	}
 
-	chatID := r.URL.Query().Get("chat_id")
-	if chatID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "缺少 chat_id 参数"})
+	contextHash := strings.TrimSpace(r.URL.Query().Get("context_hash"))
+	chatID := strings.TrimSpace(r.URL.Query().Get("chat_id"))
+	if contextHash == "" && chatID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "缺少 context_hash 或 chat_id 参数"})
 		return
 	}
 
-	// Find session by chat_id
 	sessions, err := h.sessions.ListAll()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt > sessions[j].UpdatedAt
+	})
 
 	var found *storage.ConversationSession
 	for i := range sessions {
-		if sessions[i].ChatID == chatID {
+		if contextHash != "" && sessions[i].ContextHash == contextHash {
+			found = &sessions[i]
+			break
+		}
+		if contextHash == "" && chatID != "" && sessions[i].ChatID == chatID {
 			found = &sessions[i]
 			break
 		}
@@ -1110,28 +1136,20 @@ func (h *Handler) HandleSessionChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get cached messages from chat tracker if available
-	messages := []map[string]any{}
-	// Note: Full chat history retrieval would require calling Qwen API
-	// For now, we return session metadata and indicate that full history requires API call
+	note := ""
+	if len(found.Messages) == 0 {
+		note = "该会话目前只有元数据；下一次通过 /v1/chat/completions 完成请求后会写入代理缓存消息。"
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session": map[string]any{
-			"context_hash":  found.ContextHash,
-			"account_email": found.AccountEmail,
-			"chat_id":       found.ChatID,
-			"model":         found.Model,
-			"chat_type":     found.ChatType,
-			"updated_at":    found.UpdatedAt,
-			"updated_time":  time.UnixMilli(found.UpdatedAt).Format(time.RFC3339),
-		},
-		"messages":          messages,
-		"note":              "完整聊天记录需要从 Qwen API 获取，当前仅返回会话元数据",
+		"session":           h.sessionSummary(*found),
+		"messages":          append([]storage.CachedChatMessage(nil), found.Messages...),
+		"note":              note,
 		"web_interface_url": "https://chat.qwen.ai/c/" + found.ChatID,
 	})
 }
 
-// HandleDeleteSession deletes a conversation session
+// HandleDeleteSession deletes a conversation session.
 func (h *Handler) HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	if h.sessions == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "会话服务未初始化"})
@@ -1141,7 +1159,7 @@ func (h *Handler) HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		ContextHash string `json:"context_hash"`
 	}
-	if err := decodeJSON(r, &payload); err != nil || payload.ContextHash == "" {
+	if err := decodeJSON(r, &payload); err != nil || strings.TrimSpace(payload.ContextHash) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体格式错误或缺少 context_hash"})
 		return
 	}
@@ -1150,5 +1168,21 @@ func (h *Handler) HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  true,
 		"message": "会话已删除",
+	})
+}
+
+// HandleClearExpiredSessions removes expired conversation session cache entries.
+func (h *Handler) HandleClearExpiredSessions(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "会话服务未初始化"})
+		return
+	}
+	if err := h.sessions.CleanupExpired(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  true,
+		"message": "过期会话已清理",
 	})
 }

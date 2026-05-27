@@ -17,7 +17,8 @@
     "uploads": "文件上传",
     "images": "AI 生图",
     "videos": "AI 生视频",
-    "debug": "接口调试"
+    "debug": "接口调试",
+    "sessions": "缓存会话"
   },
   "common": {
     "refresh": "刷新数据",
